@@ -8,14 +8,15 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,6 +33,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -101,26 +103,33 @@ fun CaptureScreen(
             if (seen.isEmpty()) {
                 Text(
                     "Tap play on the video below. Magpie picks the stream up as it starts.",
-                    Modifier.padding(16.dp),
+                    Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                LazyColumn(
-                    Modifier.fillMaxWidth().height(150.dp).padding(horizontal = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                // A fixed-height row that scrolls sideways. A vertical list grew
+                // with every stream found and ate the player's height while the
+                // user was still trying to watch it.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(46.dp)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    items(seen) { c ->
+                    seen.forEach { c ->
                         Surface(
                             shape = MaterialTheme.shapes.small,
                             color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(
-                                "${c.facts.label}  ·  ${c.approxBytes?.let { formatBytes(it) } ?: "?"}" +
-                                    "  ·  ${if (c.facts.isAudio) "audio" else "video"}",
-                                Modifier.padding(10.dp),
+                                "${c.facts.label} \u00b7 ${c.approxBytes?.let { formatBytes(it) } ?: "?"}",
+                                Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                 style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
                             )
                         }
                     }
@@ -128,7 +137,12 @@ fun CaptureScreen(
             }
 
             AndroidView(
-                modifier = Modifier.fillMaxSize(),
+                // weight, not fillMaxSize: inside a Column the latter measures
+                // against the full parent height, so the player overflowed past
+                // the bottom of the screen and swallowed scroll gestures.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
                 factory = { ctx ->
                     CookieManager.getInstance().setAcceptCookie(true)
                     WebView(ctx).apply {

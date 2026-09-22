@@ -108,7 +108,12 @@ fun LoginScreen(site: Cookies.Site, onDone: () -> Unit) {
                 )
             }
             AndroidView(
-                modifier = Modifier.fillMaxSize(),
+                // weight, not fillMaxSize: inside a Column the latter measures
+                // against the full parent height, so the page overflowed past
+                // the bottom of the screen and swallowed scroll gestures.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
                 factory = { ctx ->
                     CookieManager.getInstance().setAcceptCookie(true)
                     WebView(ctx).apply {

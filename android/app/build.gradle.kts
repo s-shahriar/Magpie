@@ -109,6 +109,18 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Signed with the release key on purpose. Debug and release
+            // otherwise carry different signatures, so swapping between them
+            // needs an uninstall — which wipes the WebView cookie jar and
+            // signs the user out of Facebook and Drive. Restoring that jar
+            // afterwards does not work: WebView encrypts cookie values with a
+            // key tied to the install, so a copied database is purged on the
+            // next launch.
+            if (rootProject.file("keystore.properties").exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
