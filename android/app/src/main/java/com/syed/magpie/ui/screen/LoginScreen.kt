@@ -127,12 +127,23 @@ fun LoginScreen(site: Cookies.Site, onDone: () -> Unit) {
                         // passkey-only account cannot sign in here. This bridges
                         // the page's WebAuthn calls to the platform credential
                         // provider; without it the only route is a password.
-                        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_AUTHENTICATION)) {
-                            WebSettingsCompat.setWebAuthenticationSupport(
-                                settings,
-                                WebSettingsCompat.WEB_AUTHENTICATION_SUPPORT_FOR_BROWSER,
-                            )
-                            passkeys = true
+                        // FOR_APP, not FOR_BROWSER: the browser level is for
+                        // privileged browser apps and leaves an ordinary app
+                        // with "The user agent does not support public key
+                        // credentials" — which is exactly what the page threw.
+                        val supported =
+                            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_AUTHENTICATION)
+                        Log.d("MagpieLogin", "WEB_AUTHENTICATION supported=$supported")
+                        if (supported) {
+                            runCatching {
+                                WebSettingsCompat.setWebAuthenticationSupport(
+                                    settings,
+                                    WebSettingsCompat.WEB_AUTHENTICATION_SUPPORT_FOR_APP,
+                                )
+                                passkeys = true
+                            }.onFailure {
+                                Log.d("MagpieLogin", "setWebAuthenticationSupport failed: $it")
+                            }
                         }
                         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
 
@@ -174,6 +185,15 @@ fun LoginScreen(site: Cookies.Site, onDone: () -> Unit) {
                                 CookieManager.getInstance().flush()
                                 signedIn = Cookies.isSignedIn(site)
                                 loading = false
+                                if (BuildConfig.DEBUG) {
+                                    view?.evaluateJavascript(
+                                        "JSON.stringify({" +
+                                            "pkc: typeof window.PublicKeyCredential," +
+                                            "creds: typeof navigator.credentials," +
+                                            "secure: window.isSecureContext," +
+                                            "host: location.host})",
+                                    ) { Log.d("MagpieLogin", "webauthn: $it") }
+                                }
                             }
 
                             override fun onReceivedError(
