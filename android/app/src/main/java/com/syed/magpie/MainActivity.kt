@@ -1,5 +1,6 @@
 package com.syed.magpie
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -22,6 +23,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        handleShare(intent)
         setContent {
             MagpieTheme {
                 Surface(Modifier.fillMaxSize()) {
@@ -30,6 +32,23 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
+
+    /** Sharing a link from Facebook or Drive drops it straight into the box. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShare(intent)
+    }
+
+    private fun handleShare(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) return
+        val shared = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
+        // Apps often share "caption https://…"; keep the URL.
+        val url = shared.split(Regex("\\s+")).lastOrNull { it.startsWith("http") }
+        if (!url.isNullOrEmpty()) {
+            vm.link = url
+            vm.fetch()
         }
     }
 }

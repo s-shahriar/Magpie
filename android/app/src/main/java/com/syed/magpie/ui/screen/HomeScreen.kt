@@ -35,12 +35,12 @@ fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 22.dp),
     ) {
-        Spacer(Modifier.height(28.dp))
-        Text("Magpie", style = MaterialTheme.typography.displaySmall)
+        Spacer(Modifier.height(30.dp))
         Text(
-            "Keep what you’ve paid for, offline.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            "Magpie",
+            style = MaterialTheme.typography.displaySmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
         )
 
         Spacer(Modifier.height(26.dp))
