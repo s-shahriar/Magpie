@@ -6,6 +6,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,19 +19,31 @@ private val Light = lightColorScheme(
     onPrimary = Ink,
     primaryContainer = CoralWash,
     onPrimaryContainer = Ink,
-    secondary = Ink,
-    onSecondary = Cream,
+    // Primary actions are coral. The reference uses its dark tone only as a
+    // slim nav bar, so a full-width dark button reads far heavier here than it
+    // does there.
+    secondary = Coral,
+    onSecondary = Ink,
     background = Cream,
     onBackground = Ink,
     surface = Cream,
     onSurface = Ink,
     surfaceVariant = CardLight,
     onSurfaceVariant = InkSoft,
+    // Every container level must be set. Left unset, Material falls back to
+    // its default scheme and the cards come out lavender against the cream.
+    surfaceContainerLowest = CardLight,
+    surfaceContainerLow = CardLight,
     surfaceContainer = CardLight,
     surfaceContainerHigh = CardLight,
+    surfaceContainerHighest = CardLight,
+    inverseSurface = Ink,
+    inverseOnSurface = Cream,
     outline = Backdrop,
     outlineVariant = Backdrop,
     error = Danger,
+    errorContainer = Color(0xFFF7DED8),
+    onErrorContainer = Ink,
 )
 
 private val Dark = darkColorScheme(
@@ -38,16 +51,21 @@ private val Dark = darkColorScheme(
     onPrimary = Ink,
     primaryContainer = CoralDeep,
     onPrimaryContainer = NightText,
-    secondary = NightText,
-    onSecondary = NightBg,
+    secondary = Coral,
+    onSecondary = Ink,
     background = NightBg,
     onBackground = NightText,
     surface = NightBg,
     onSurface = NightText,
     surfaceVariant = NightCard,
     onSurfaceVariant = NightTextSoft,
+    surfaceContainerLowest = NightCard,
+    surfaceContainerLow = NightCard,
     surfaceContainer = NightCard,
     surfaceContainerHigh = NightCard,
+    surfaceContainerHighest = NightCard,
+    inverseSurface = NightText,
+    inverseOnSurface = NightBg,
     outline = NightLine,
     outlineVariant = NightLine,
     error = Danger,

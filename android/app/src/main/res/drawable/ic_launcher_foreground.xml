@@ -1,13 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Magpie: long wedge tail longer than the body, white flank and wing.
+     Scaled into the adaptive-icon safe zone so launcher masks do not clip
+     the tail tip. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp"
-    android:viewportWidth="108" android:viewportHeight="108">
-    <!-- A downward arrow into a tray: what the app does, in one mark. -->
-    <path android:fillColor="#282828"
-        android:pathData="M54,30 L54,58 M44,49 L54,59 L64,49" 
-        android:strokeColor="#282828" android:strokeWidth="5"
-        android:strokeLineCap="round" android:strokeLineJoin="round" />
-    <path android:fillColor="#00000000"
-        android:pathData="M38,66 L38,72 L70,72 L70,66"
-        android:strokeColor="#282828" android:strokeWidth="5"
-        android:strokeLineCap="round" android:strokeLineJoin="round" />
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.8"
+        android:scaleY="0.8"
+        android:translateX="11.2"
+        android:translateY="7.6">
+        <path android:fillColor="#2B2622" android:pathData="M13 45 L27 38 C28 27 40 24 47 31 C52 36 53 41 54 46 C58 50 62 54 66 58 L94 86 L88 92 L60 67 C58 73 54 78 47 79 C38 80 31 73 30 64 C29 58 29 53 29 50 Z" />
+        <path android:fillColor="#FDFBF9" android:pathData="M39 56 C46 52 53 55 56 62 C54 70 47 75 40 72 C35 68 34 60 39 56 Z" />
+        <path android:fillColor="#FDFBF9" android:pathData="M43 42 C51 44 56 49 59 56 C54 53 48 50 42 49 Z" />
+        <path android:fillColor="#FFA371"
+            android:pathData="M40.4 36 A2.4 2.4 0 1 1 35.6 36 A2.4 2.4 0 1 1 40.4 36 Z" />
+    </group>
 </vector>

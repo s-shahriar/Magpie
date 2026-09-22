@@ -62,7 +62,13 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
 
     let found = collect(&page);
     if found.is_empty() {
-        return Err(MagpieError::NoMedia);
+        // A page whose video the caller may watch always embeds at least one
+        // DASH `base_url`. None at all means Facebook served a wall instead,
+        // which is a sign-in problem rather than an empty page — and saying so
+        // gets the user to the fix instead of a dead end.
+        return Err(MagpieError::AuthRequired {
+            service: "Facebook".into(),
+        });
     }
 
     // The post's own video is the first one laid out in the document; the rest

@@ -1,6 +1,7 @@
 package com.syed.magpie.ui
 
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,8 +24,6 @@ import com.syed.magpie.ui.screen.HomeScreen
 import com.syed.magpie.ui.screen.LibraryScreen
 import com.syed.magpie.ui.screen.LoginScreen
 import com.syed.magpie.ui.screen.SettingsScreen
-import com.syed.magpie.ui.theme.Coral
-import com.syed.magpie.ui.theme.Ink
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     Fetch("Fetch", Icons.Default.Download),
@@ -82,8 +81,9 @@ private fun NavBar(current: Tab, onSelect: (Tab) -> Unit, modifier: Modifier = M
     Surface(
         modifier = modifier.fillMaxWidth().height(66.dp),
         shape = RoundedCornerShape(50),
-        color = Ink,
-        shadowElevation = 10.dp,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        shadowElevation = 8.dp,
     ) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = 8.dp),
@@ -96,7 +96,9 @@ private fun NavBar(current: Tab, onSelect: (Tab) -> Unit, modifier: Modifier = M
                 Row(
                     Modifier
                         .clip(RoundedCornerShape(50))
-                        .background(if (active) Coral else Color.Transparent)
+                        .background(
+                            if (active) MaterialTheme.colorScheme.primary else Color.Transparent
+                        )
                         .clickable(onClick = { onSelect(t) })
                         .padding(horizontal = 14.dp + pad, vertical = 11.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -105,11 +107,19 @@ private fun NavBar(current: Tab, onSelect: (Tab) -> Unit, modifier: Modifier = M
                         t.icon,
                         t.label,
                         Modifier.size(21.dp),
-                        tint = if (active) Ink else Color(0xFF9A948C),
+                        tint = if (active) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
                     if (active) {
                         Spacer(Modifier.width(8.dp))
-                        Text(t.label, style = MaterialTheme.typography.labelLarge, color = Ink)
+                        Text(
+                            t.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
                     }
                 }
             }

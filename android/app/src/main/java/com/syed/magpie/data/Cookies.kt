@@ -15,7 +15,7 @@ object Cookies {
 
     /** Sites the app can sign into, in the order the picker shows them. */
     enum class Site(val key: String, val label: String, val loginUrl: String, val probe: String) {
-        FACEBOOK("facebook", "Facebook", "https://m.facebook.com/login", "https://www.facebook.com/"),
+        FACEBOOK("facebook", "Facebook", "https://www.facebook.com/login.php", "https://www.facebook.com/"),
         GDRIVE("gdrive", "Google Drive", "https://accounts.google.com/ServiceLogin?service=wise", "https://drive.google.com/"),
         ;
 

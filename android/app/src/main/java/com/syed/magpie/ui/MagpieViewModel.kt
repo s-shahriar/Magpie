@@ -19,6 +19,7 @@ import com.syed.magpie.data.UpdateInfo
 import com.syed.magpie.data.UpdateService
 import com.syed.magpie.data.safeFileName
 import kotlinx.coroutines.launch
+import uniffi.magpie_core.MagpieException
 import uniffi.magpie_core.MediaInfo
 import uniffi.magpie_core.Rendition
 import java.io.File
@@ -74,16 +75,21 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- link handling -------------------------------------------------
 
+    /**
+     * Resolve the link.
+     *
+     * Deliberately does **not** check for a session first. Plenty of Drive
+     * links are shared publicly and resolve with no cookies at all; demanding a
+     * sign-in before even trying made the app refuse links that work fine in a
+     * private browser window. Whatever cookies exist are sent, and sign-in is
+     * only offered when the extractor reports it is actually needed.
+     */
     fun fetch() {
         val url = link.trim()
         if (url.isEmpty()) return
         val site = Cookies.Site.of(Catalog.serviceFor(url))
         if (site == null) {
             probe = ProbeState.Failed("That link is not supported yet.")
-            return
-        }
-        if (!Cookies.isSignedIn(site)) {
-            probe = ProbeState.NeedsLogin(site)
             return
         }
         probe = ProbeState.Working
@@ -94,11 +100,16 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
                     chooser = it
                 }
                 .onFailure { e ->
-                    val msg = e.message.orEmpty()
-                    probe = if (msg.contains("sign-in", true)) {
-                        ProbeState.NeedsLogin(site)
-                    } else {
-                        ProbeState.Failed(msg.ifEmpty { "Could not read that link." })
+                    probe = when (e) {
+                        is MagpieException.AuthRequired -> ProbeState.NeedsLogin(site)
+                        is MagpieException.NoMedia ->
+                            ProbeState.Failed("No video on that page.")
+                        is MagpieException.Unsupported ->
+                            ProbeState.Failed("That link is not supported yet.")
+                        is MagpieException.Network ->
+                            ProbeState.Failed("Network problem — ${e.msg}")
+                        is MagpieException.Parse -> ProbeState.Failed(e.msg)
+                        else -> ProbeState.Failed(e.message ?: "Could not read that link.")
                     }
                 }
         }
