@@ -16,9 +16,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,6 +31,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.StrokeCap
@@ -44,16 +49,57 @@ import com.syed.magpie.ui.MagpieViewModel
 @Composable
 fun LibraryScreen(vm: MagpieViewModel, modifier: Modifier = Modifier) {
     val jobs by vm.jobs.collectAsStateWithLifecycle()
+    var confirming by remember { mutableStateOf<DownloadJob?>(null) }
+
+    confirming?.let { job ->
+        AlertDialog(
+            onDismissRequest = { confirming = null },
+            title = { Text("Delete this video?") },
+            text = {
+                Text(
+                    "\u201c${job.title}\u201d will be removed from Downloads/Magpie. " +
+                        "This cannot be undone.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteWithFile(job)
+                    confirming = null
+                }) { Text("Delete video", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        vm.cancel(job.id)
+                        confirming = null
+                    }) { Text("Remove from list") }
+                    TextButton(onClick = { confirming = null }) { Text("Cancel") }
+                }
+            },
+        )
+    }
 
     Column(modifier.fillMaxSize().padding(horizontal = 22.dp)) {
-        Spacer(Modifier.height(28.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Library", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-            if (jobs.any { it.status == DownloadStatus.COMPLETED }) {
-                TextButton(onClick = vm::clearFinished) { Text("Clear done") }
+        Spacer(Modifier.height(30.dp))
+        Text(
+            "Library",
+            style = MaterialTheme.typography.displaySmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (jobs.any { it.status == DownloadStatus.COMPLETED }) {
+            Spacer(Modifier.height(2.dp))
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                IconButton(onClick = vm::clearFinished) {
+                    Icon(
+                        Icons.Default.PlaylistRemove,
+                        "Clear finished downloads",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(26.dp))
 
         if (jobs.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -69,14 +115,16 @@ fun LibraryScreen(vm: MagpieViewModel, modifier: Modifier = Modifier) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 110.dp),
             ) {
-                items(jobs, key = { it.id }) { job -> JobCard(job, vm) }
+                items(jobs, key = { it.id }) { job ->
+                    JobCard(job, vm) { confirming = job }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun JobCard(job: DownloadJob, vm: MagpieViewModel) {
+private fun JobCard(job: DownloadJob, vm: MagpieViewModel, onConfirmDelete: () -> Unit) {
     Surface(
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -92,7 +140,7 @@ private fun JobCard(job: DownloadJob, vm: MagpieViewModel) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Controls(job, vm)
+                Controls(job, vm, onConfirmDelete)
             }
 
             if (job.status != DownloadStatus.COMPLETED) {
@@ -131,7 +179,7 @@ private fun JobCard(job: DownloadJob, vm: MagpieViewModel) {
 }
 
 @Composable
-private fun Controls(job: DownloadJob, vm: MagpieViewModel) {
+private fun Controls(job: DownloadJob, vm: MagpieViewModel, onConfirmDelete: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         when {
             job.status == DownloadStatus.COMPLETED -> {
@@ -163,7 +211,13 @@ private fun Controls(job: DownloadJob, vm: MagpieViewModel) {
             }
         }
         if (job.status != DownloadStatus.MERGING && job.status != DownloadStatus.SAVING) {
-            IconButton(onClick = { vm.cancel(job.id) }) { Icon(Icons.Default.Close, "Remove") }
+            IconButton(
+                onClick = {
+                    // A finished job owns a real file, so that one asks first.
+                    if (job.status == DownloadStatus.COMPLETED) onConfirmDelete()
+                    else vm.cancel(job.id)
+                },
+            ) { Icon(Icons.Default.Close, "Remove") }
         }
     }
 }

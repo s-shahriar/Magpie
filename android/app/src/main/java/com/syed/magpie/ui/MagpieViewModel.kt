@@ -11,7 +11,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.syed.magpie.data.Catalog
 import com.syed.magpie.data.Cookies
+import androidx.core.net.toUri
 import com.syed.magpie.data.DownloadEngine
+import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadProgress
 import com.syed.magpie.data.UpdateInfo
 import com.syed.magpie.data.UpdateService
@@ -202,6 +204,22 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
     fun cancel(id: String) = DownloadEngine.cancel(id)
 
     fun clearFinished() = DownloadEngine.clearFinished()
+
+    /**
+     * Removes the row and the saved video.
+     *
+     * Only reachable behind a confirmation: unlike everything else in the
+     * Library this cannot be undone by downloading again in a few seconds —
+     * the file is gone from Downloads.
+     */
+    fun deleteWithFile(job: DownloadJob) {
+        job.outputUri?.let { raw ->
+            runCatching {
+                getApplication<Application>().contentResolver.delete(raw.toUri(), null, null)
+            }
+        }
+        DownloadEngine.cancel(job.id)
+    }
 
     fun open(uri: Uri) {
         val intent = Intent(Intent.ACTION_VIEW)

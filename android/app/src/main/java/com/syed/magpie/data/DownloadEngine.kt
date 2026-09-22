@@ -185,9 +185,17 @@ object DownloadEngine {
     }
 
     private fun update(f: (List<DownloadJob>) -> List<DownloadJob>) {
+        val previous = _jobs.value.associate { it.id to it.status }
         val next = f(_jobs.value)
         _jobs.value = next
-        store.save(next)
+
+        // Progress ticks are throttled, but a status change must reach disk
+        // immediately. Without this the write that marked a job COMPLETED
+        // could be swallowed by the throttle, and the job came back after a
+        // restart as PAUSED at 99% — with its file already saved.
+        val statusChanged = next.size != previous.size ||
+            next.any { previous[it.id] != it.status }
+        store.save(next, force = statusChanged)
         syncService()
     }
 

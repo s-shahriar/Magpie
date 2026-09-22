@@ -4,7 +4,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -59,6 +62,8 @@ fun SettingsScreen(
             }
         }
 
+        ImportCookiesRow { refresh++ }
+
         Spacer(Modifier.height(22.dp))
         SectionTitle("Updates")
         UpdateCard(vm)
@@ -73,6 +78,59 @@ fun SettingsScreen(
             }
         }
         Spacer(Modifier.height(110.dp))
+    }
+}
+
+/**
+ * Seeds the cookie jar from a desktop export.
+ *
+ * Useful when a site's sign-in will not work in a WebView — Facebook's passkey
+ * flow, for one — or simply to avoid typing a password on a phone. Export with
+ * `yt-dlp --cookies-from-browser chrome --cookies cookies.txt`.
+ */
+@Composable
+private fun ImportCookiesRow(onImported: () -> Unit) {
+    val context = LocalContext.current
+    var result by remember { mutableStateOf<String?>(null) }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        result = runCatching {
+            val text = context.contentResolver.openInputStream(uri)
+                ?.bufferedReader()?.use { it.readText() }
+                ?: error("Could not read that file")
+            val counts = Cookies.importNetscape(text)
+            if (counts.isEmpty()) {
+                "No Facebook or Drive cookies in that file"
+            } else {
+                counts.entries.joinToString(", ") { "${it.key.label}: ${it.value}" }
+            }
+        }.getOrElse { it.message ?: "Import failed" }
+        onImported()
+    }
+
+    Card(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Import cookies", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Sign in on a computer and bring the session over, instead of " +
+                    "typing a password here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            Action("Choose cookies.txt") {
+                picker.launch(arrayOf("text/plain", "application/octet-stream", "*/*"))
+            }
+            result?.let {
+                Spacer(Modifier.height(10.dp))
+                Text(it, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+        }
     }
 }
 

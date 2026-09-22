@@ -1,5 +1,7 @@
 package com.syed.magpie.ui.screen
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -85,16 +87,19 @@ fun HomeScreen(
                 contentColor = MaterialTheme.colorScheme.onSecondary,
             ),
         ) {
-            if (vm.probe is ProbeState.Working) {
-                CircularProgressIndicator(
-                    Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onSecondary,
-                )
-                Spacer(Modifier.width(10.dp))
-                Text("Reading link…")
-            } else {
-                Text("Fetch qualities")
+            // The label sits at true centre and the spinner floats beside it.
+            // Laying them out as a centred row pushed the text off-centre by
+            // half the spinner's width the moment the button was pressed.
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                val working = vm.probe is ProbeState.Working
+                Text(if (working) "Reading link…" else "Fetch qualities")
+                if (working) {
+                    CircularProgressIndicator(
+                        Modifier.align(Alignment.CenterStart).size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onSecondary,
+                    )
+                }
             }
         }
 
@@ -146,29 +151,44 @@ private fun Notice(
     onAction: () -> Unit,
     error: Boolean = false,
 ) {
+    val accent = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Surface(
         shape = MaterialTheme.shapes.medium,
-        color = if (error) MaterialTheme.colorScheme.errorContainer
-        else MaterialTheme.colorScheme.primaryContainer,
+        // A calm card with a coloured edge. The filled container read as a
+        // slab of orange in dark mode, louder than the thing it was announcing.
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(18.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
-            Text(body, style = MaterialTheme.typography.bodySmall)
-            if (actionLabel != null) {
-                Spacer(Modifier.height(14.dp))
-                Button(
-                    onClick = onAction,
-                    shape = MaterialTheme.shapes.small,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary,
-                        contentColor = MaterialTheme.colorScheme.onSecondary,
-                    ),
-                ) {
-                    Icon(Icons.Default.Login, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(actionLabel)
+        Row(Modifier.height(IntrinsicSize.Min)) {
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .background(accent),
+            )
+            Column(Modifier.padding(16.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    body,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (actionLabel != null) {
+                    Spacer(Modifier.height(14.dp))
+                    Button(
+                        onClick = onAction,
+                        shape = MaterialTheme.shapes.small,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary,
+                        ),
+                    ) {
+                        Icon(Icons.Default.Login, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(actionLabel)
+                    }
                 }
             }
         }

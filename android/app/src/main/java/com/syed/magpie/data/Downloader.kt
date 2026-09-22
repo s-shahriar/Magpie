@@ -55,20 +55,32 @@ class Downloader(private val context: Context) {
             fetch(job.audioUrl!!, audioFile, cookie, "", 0.1f, videoShare, job, onTick)
         }
 
-        val merged: File
+        val uri: Uri
         if (needsAudio) {
-            onTick(Tick(DownloadStatus.MERGING, "Merging", job.totalBytes ?: 0, job.totalBytes, 0))
-            merged = File(context.cacheDir, "dl-${job.id}-out.mp4")
-            mux(videoFile, audioFile, merged)
+            // Mux directly into the destination file. Writing the merged MP4 to
+            // cache and then copying it into MediaStore meant a second full
+            // pass over several hundred megabytes for no reason — on a 361 MB
+            // video that copy alone was most of the wait.
+            uri = createPending(job.fileName)
+            try {
+                context.contentResolver.openFileDescriptor(uri, "rw").use { pfd ->
+                    checkNotNull(pfd) { "Could not open the output file" }
+                    mux(videoFile, audioFile, pfd.fileDescriptor, job.totalBytes) { done, total ->
+                        onTick(Tick(DownloadStatus.MERGING, "Merging", done, total, 0))
+                    }
+                }
+                markReady(uri)
+            } catch (t: Throwable) {
+                runCatching { context.contentResolver.delete(uri, null, null) }
+                throw t
+            }
         } else {
-            merged = videoFile
+            onTick(Tick(DownloadStatus.SAVING, "Saving", job.totalBytes ?: 0, job.totalBytes, 0))
+            uri = publish(videoFile, job.fileName)
         }
 
-        onTick(Tick(DownloadStatus.SAVING, "Saving", job.totalBytes ?: 0, job.totalBytes, 0))
-        val uri = publish(merged, job.fileName)
-
-        videoFile.delete(); audioFile.delete()
-        if (merged != videoFile) merged.delete()
+        videoFile.delete()
+        audioFile.delete()
         uri
     }
 
@@ -186,9 +198,19 @@ class Downloader(private val context: Context) {
             }
         }
 
-    /** Stream-copy both inputs into one MP4. No transcode, so it is fast. */
-    private fun mux(video: File, audio: File, out: File) {
-        val muxer = MediaMuxer(out.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+    /**
+     * Stream-copy both inputs into one MP4. No transcode, so the cost is
+     * almost entirely moving bytes — which is why it is worth not moving them
+     * twice.
+     */
+    private fun mux(
+        video: File,
+        audio: File,
+        target: java.io.FileDescriptor,
+        expected: Long?,
+        onProgress: (Long, Long?) -> Unit,
+    ) {
+        val muxer = MediaMuxer(target, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         val inputs = listOf(video, audio).map { MediaExtractor().apply { setDataSource(it.absolutePath) } }
         try {
             val mapping = mutableListOf<Pair<MediaExtractor, Int>>()
@@ -212,6 +234,8 @@ class Downloader(private val context: Context) {
             muxer.start()
             val buffer = ByteBuffer.allocate(maxBuffer)
             val info = MediaCodec.BufferInfo()
+            var copied = 0L
+            var lastReport = 0L
             mapping.forEach { (ex, track) ->
                 while (true) {
                     val size = ex.readSampleData(buffer, 0)
@@ -222,13 +246,37 @@ class Downloader(private val context: Context) {
                     info.flags = ex.sampleFlags
                     muxer.writeSampleData(track, buffer, info)
                     ex.advance()
+                    copied += size
+                    // Without this the UI sat on a bare "Merging" for minutes
+                    // and looked hung.
+                    if (copied - lastReport > 8L * 1024 * 1024) {
+                        lastReport = copied
+                        onProgress(copied, expected)
+                    }
                 }
             }
             muxer.stop()
+            onProgress(expected ?: copied, expected)
         } finally {
             runCatching { muxer.release() }
             inputs.forEach { runCatching { it.release() } }
         }
+    }
+
+    private fun createPending(fileName: String): Uri {
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "video/mp4")
+            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Magpie")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        return context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: error("Could not create the output file")
+    }
+
+    private fun markReady(uri: Uri) {
+        val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+        context.contentResolver.update(uri, done, null, null)
     }
 
     /** Publish into Downloads/Magpie via MediaStore — no storage permission. */
