@@ -41,6 +41,20 @@ fun MagpieApp(vm: MagpieViewModel) {
         if (vm.libraryRequest > 0) tab = Tab.Library
     }
 
+    val capturing = (vm.probe as? ProbeState.NeedsCapture)?.url
+    var captureOpen by remember { mutableStateOf(false) }
+    if (captureOpen && capturing != null) {
+        com.syed.magpie.ui.screen.CaptureScreen(
+            postUrl = capturing,
+            onPicked = { items ->
+                captureOpen = false
+                vm.onCaptured(items, capturing)
+            },
+            onDone = { captureOpen = false },
+        )
+        return
+    }
+
     val site = login
     if (site != null) {
         LoginScreen(site) {
@@ -53,7 +67,11 @@ fun MagpieApp(vm: MagpieViewModel) {
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when (tab) {
-            Tab.Fetch -> HomeScreen(vm, onSignIn = { login = it })
+            Tab.Fetch -> HomeScreen(
+                vm,
+                onSignIn = { login = it },
+                onCapture = { captureOpen = true },
+            )
             Tab.Library -> LibraryScreen(vm)
             Tab.Settings -> SettingsScreen(vm, onSignIn = { login = it })
         }

@@ -9,7 +9,7 @@ pub mod extract;
 pub mod http;
 pub mod model;
 
-pub use model::{MagpieError, MediaInfo, Rendition};
+pub use model::{MagpieError, MediaInfo, Rendition, StreamFacts};
 
 uniffi::setup_scaffolding!();
 
@@ -26,6 +26,12 @@ pub fn probe(url: String, cookie: String) -> Result<MediaInfo, MagpieError> {
 #[uniffi::export]
 pub fn service_for(url: String) -> Option<String> {
     extract::service_for(url.trim()).map(|s| s.to_string())
+}
+
+/// Identify a stream URL captured from the player's network traffic.
+#[uniffi::export]
+pub fn describe_stream(url: String) -> Option<StreamFacts> {
+    extract::facebook::describe(&url)
 }
 
 /// Version string, shown in the app's About row.

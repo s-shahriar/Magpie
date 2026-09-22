@@ -113,17 +113,18 @@ class DownloadNotifier(private val context: Context) {
 
     private fun progressLine(job: DownloadJob?): String {
         if (job == null) return "Starting"
-        return buildString {
-            append(job.stage)
+        val parts = buildList {
+            add(job.stage)
             val total = job.totalBytes
             if (total != null) {
-                append(" · ${formatBytes(job.downloadedBytes)} / ${formatBytes(total)}")
+                add("${formatBytes(job.downloadedBytes)} / ${formatBytes(total)}")
             } else if (job.downloadedBytes > 0) {
-                append(" · ${formatBytes(job.downloadedBytes)}")
+                add(formatBytes(job.downloadedBytes))
             }
-            if (job.bytesPerSecond > 0) append(" · ${formatBytes(job.bytesPerSecond)}/s")
-            job.etaSeconds?.let { append(" · ${eta(it)} left") }
-        }
+            if (job.bytesPerSecond > 0) add("${formatBytes(job.bytesPerSecond)}/s")
+            job.etaSeconds?.let { add("${eta(it)} left") }
+        }.filter { it.isNotBlank() }
+        return parts.joinToString(" · ").ifEmpty { "Starting" }
     }
 
     private fun eta(secs: Long): String =

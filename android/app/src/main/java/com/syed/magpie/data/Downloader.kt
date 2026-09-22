@@ -46,13 +46,13 @@ class Downloader(private val context: Context) {
         // Total is split between the two streams so the bar reflects real work.
         val videoShare = if (needsAudio) 0.88f else 1f
 
-        // Both passes report the same stage. Which stream is on the wire is
-        // an implementation detail — the bar covers the pair as one job, so
-        // saying "Downloading audio" only raises a question about a file the
-        // user asked for as a video.
-        fetch(job.videoUrl, videoFile, cookie, "Downloading", videoShare, 0f, job, onTick)
+        // No stage label while bytes are moving: a running bar beside a size
+        // and a speed already says "downloading", and which of the two streams
+        // is on the wire is an implementation detail. The label comes back for
+        // the stages that are not self-evident — merging, saving, paused.
+        fetch(job.videoUrl, videoFile, cookie, "", videoShare, 0f, job, onTick)
         if (needsAudio) {
-            fetch(job.audioUrl!!, audioFile, cookie, "Downloading", 0.1f, videoShare, job, onTick)
+            fetch(job.audioUrl!!, audioFile, cookie, "", 0.1f, videoShare, job, onTick)
         }
 
         val merged: File

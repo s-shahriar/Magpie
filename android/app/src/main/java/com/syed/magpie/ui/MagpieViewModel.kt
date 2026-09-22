@@ -28,6 +28,8 @@ sealed interface ProbeState {
     data object Working : ProbeState
     data class Ready(val info: MediaInfo) : ProbeState
     data class NeedsLogin(val site: Cookies.Site) : ProbeState
+    /** Facebook no longer ships the manifest; the player has to be watched. */
+    data class NeedsCapture(val url: String) : ProbeState
     data class Failed(val message: String) : ProbeState
 }
 
@@ -98,9 +100,21 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 .onFailure { e ->
                     probe = when (e) {
-                        is MagpieException.AuthRequired -> ProbeState.NeedsLogin(site)
+                        // A live Facebook session that still finds nothing means
+                        // the page withheld the manifest, not that the user is
+                        // signed out — capture from the player instead.
+                        is MagpieException.AuthRequired ->
+                            if (site == Cookies.Site.FACEBOOK && Cookies.isSignedIn(site)) {
+                                ProbeState.NeedsCapture(url)
+                            } else {
+                                ProbeState.NeedsLogin(site)
+                            }
                         is MagpieException.NoMedia ->
-                            ProbeState.Failed("No video on that page.")
+                            if (site == Cookies.Site.FACEBOOK) {
+                                ProbeState.NeedsCapture(url)
+                            } else {
+                                ProbeState.Failed("No video on that page.")
+                            }
                         is MagpieException.Unsupported ->
                             ProbeState.Failed("That link is not supported yet.")
                         is MagpieException.Network ->
@@ -139,6 +153,47 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         link = ""
         probe = ProbeState.Idle
     }
+
+    /** Turn streams seen on the wire into a normal quality choice. */
+    fun onCaptured(items: List<com.syed.magpie.ui.screen.Captured>, sourceUrl: String) {
+        if (items.isEmpty()) return
+        val videos = items.filterNot { it.facts.isAudio }
+            .sortedBy { it.approxBytes ?: Long.MAX_VALUE }
+        val audios = items.filter { it.facts.isAudio }
+            .sortedBy { it.approxBytes ?: Long.MAX_VALUE }
+        if (videos.isEmpty()) return
+
+        fun rendition(c: com.syed.magpie.ui.screen.Captured) = Rendition(
+            id = c.facts.tag,
+            label = c.facts.label,
+            kind = if (c.facts.isAudio) "audio" else "video",
+            width = null,
+            height = null,
+            bitrate = c.facts.bitrate,
+            approxBytes = c.approxBytes?.toULong(),
+            exactSize = false,
+            mime = null,
+            codec = null,
+            url = c.url,
+        )
+
+        val info = MediaInfo(
+            source = "facebook",
+            mediaId = videos.first().facts.videoId,
+            title = capturedTitle.ifBlank { "facebook-" + videos.first().facts.videoId },
+            durationSecs = videos.first().facts.durationSecs,
+            thumbnail = null,
+            video = videos.map(::rendition),
+            audio = audios.map(::rendition),
+            muxed = audios.isEmpty(),
+        )
+        link = sourceUrl
+        chooser = info
+        probe = ProbeState.Ready(info)
+    }
+
+    /** Title scraped from the capture page, when there is one. */
+    var capturedTitle: String = ""
 
     fun pause(id: String) = DownloadEngine.pause(id)
 

@@ -25,6 +25,7 @@ import com.syed.magpie.ui.ProbeState
 fun HomeScreen(
     vm: MagpieViewModel,
     onSignIn: (Cookies.Site) -> Unit,
+    onCapture: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -106,6 +107,14 @@ fun HomeScreen(
                     "for later. Nothing is sent anywhere else.",
                 actionLabel = "Sign in",
                 onAction = { onSignIn(s.site) },
+            )
+            is ProbeState.NeedsCapture -> Notice(
+                title = "One more tap for this one",
+                body = "Facebook no longer puts the video in the page, so Magpie " +
+                    "watches the player instead. Open it and press play — the " +
+                    "qualities appear as it starts.",
+                actionLabel = "Open video",
+                onAction = onCapture,
             )
             is ProbeState.Failed -> Notice(
                 title = "Could not read that link",

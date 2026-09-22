@@ -170,13 +170,17 @@ private fun Controls(job: DownloadJob, vm: MagpieViewModel) {
 
 private fun statusLine(job: DownloadJob): String {
     job.error?.let { return it }
-    return buildString {
-        append(job.stage)
+    // The stage is blank while bytes are moving — the bar says that much on
+    // its own — so the parts are joined rather than concatenated, or the line
+    // would open on a stray separator.
+    val parts = buildList {
+        add(job.stage)
         val total = job.totalBytes
         if (total != null && job.downloadedBytes > 0) {
-            append(" · ${formatBytes(job.downloadedBytes)} / ${formatBytes(total)}")
+            add("${formatBytes(job.downloadedBytes)} / ${formatBytes(total)}")
         }
-        if (job.bytesPerSecond > 0) append(" · ${formatBytes(job.bytesPerSecond)}/s")
-        job.etaSeconds?.let { append(" · ${it / 60}m ${it % 60}s left") }
-    }
+        if (job.bytesPerSecond > 0) add("${formatBytes(job.bytesPerSecond)}/s")
+        job.etaSeconds?.let { add("${it / 60}m ${it % 60}s left") }
+    }.filter { it.isNotBlank() }
+    return parts.joinToString(" · ").ifEmpty { "Starting" }
 }

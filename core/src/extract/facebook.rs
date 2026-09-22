@@ -12,7 +12,7 @@
 //! unrelated videos (sidebar reels) alongside the one that was asked for.
 
 use crate::http;
-use crate::model::{MagpieError, MediaInfo, Rendition};
+use crate::model::{MagpieError, MediaInfo, Rendition, StreamFacts};
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -43,6 +43,37 @@ struct Found {
     bitrate: u64,
     duration: u64,
     url: String,
+}
+
+/// Reads the metadata Facebook bakes into a stream URL's `efg` parameter.
+///
+/// The page no longer ships a DASH manifest — video data now arrives through a
+/// runtime GraphQL fetch — so URLs are captured from the player's own network
+/// traffic instead. Each one still carries `efg`, which identifies the video,
+/// the rendition, its bitrate and duration, and that is enough to present a
+/// quality list without parsing any page at all.
+pub fn describe(url: &str) -> Option<StreamFacts> {
+    let efg_raw = EFG.captures(url)?.get(1)?.as_str().to_string();
+    let decoded = percent_encoding::percent_decode_str(&efg_raw)
+        .decode_utf8_lossy()
+        .to_string();
+    let bytes = STANDARD_NO_PAD.decode(decoded.trim_end_matches('=')).ok()?;
+    let efg: Efg = serde_json::from_slice(&bytes).ok()?;
+    let tag = efg.vencode_tag?;
+    let video_id = match efg.video_id? {
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s,
+        _ => return None,
+    };
+    let bitrate = efg.bitrate.unwrap_or(0);
+    Some(StreamFacts {
+        video_id,
+        is_audio: tag.contains("audio"),
+        label: if tag.contains("audio") { "audio".into() } else { label_for(bitrate) },
+        tag,
+        bitrate,
+        duration_secs: efg.duration_s.unwrap_or(0.0) as u64,
+    })
 }
 
 pub fn matches(url: &str) -> bool {

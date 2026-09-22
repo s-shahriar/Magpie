@@ -40,6 +40,17 @@ pub struct MediaInfo {
     pub muxed: bool,
 }
 
+/// What a captured stream URL declares about itself.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct StreamFacts {
+    pub video_id: String,
+    pub tag: String,
+    pub label: String,
+    pub is_audio: bool,
+    pub bitrate: u64,
+    pub duration_secs: u64,
+}
+
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum MagpieError {
     #[error("network: {msg}")]
