@@ -152,6 +152,7 @@ dependencies {
     implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.webkit)
     implementation(libs.jna) { artifact { type = "aar" } }
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)

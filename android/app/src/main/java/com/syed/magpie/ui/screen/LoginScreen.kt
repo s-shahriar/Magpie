@@ -34,6 +34,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import com.syed.magpie.BuildConfig
 import com.syed.magpie.data.Cookies
 
@@ -67,6 +69,7 @@ fun LoginScreen(site: Cookies.Site, onDone: () -> Unit) {
     // is fine and is much nicer on a phone, so it does not.
     var desktop by remember { mutableStateOf(site == Cookies.Site.FACEBOOK) }
     var web by remember { mutableStateOf<WebView?>(null) }
+    var passkeys by remember { mutableStateOf(false) }
 
     BackHandler { onDone() }
 
@@ -118,6 +121,19 @@ fun LoginScreen(site: Cookies.Site, onDone: () -> Unit) {
                         settings.useWideViewPort = true
                         settings.javaScriptCanOpenWindowsAutomatically = true
                         settings.userAgentString = uaFor(this, desktop)
+
+                        // Passkeys. A stock WebView has no WebAuthn at all, so
+                        // the Google Password Manager sheet never appears and a
+                        // passkey-only account cannot sign in here. This bridges
+                        // the page's WebAuthn calls to the platform credential
+                        // provider; without it the only route is a password.
+                        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_AUTHENTICATION)) {
+                            WebSettingsCompat.setWebAuthenticationSupport(
+                                settings,
+                                WebSettingsCompat.WEB_AUTHENTICATION_SUPPORT_FOR_BROWSER,
+                            )
+                            passkeys = true
+                        }
                         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
 
                         webChromeClient = object : WebChromeClient() {
@@ -131,6 +147,29 @@ fun LoginScreen(site: Cookies.Site, onDone: () -> Unit) {
                             }
                         }
                         webViewClient = object : WebViewClient() {
+                            override fun onPageStarted(
+                                view: WebView?,
+                                url: String?,
+                                favicon: android.graphics.Bitmap?,
+                            ) {
+                                // Installed before the page's own scripts run so
+                                // their throws are captured with a stack.
+                                if (!BuildConfig.DEBUG) return
+                                view?.evaluateJavascript(
+                                    """
+                                    window.addEventListener('error', function (e) {
+                                      console.log('MAGPIE_ERR ' + e.message +
+                                        ' @' + e.filename + ':' + e.lineno +
+                                        ' stack=' + (e.error && e.error.stack));
+                                    }, true);
+                                    window.addEventListener('unhandledrejection', function (e) {
+                                      console.log('MAGPIE_REJECT ' + e.reason);
+                                    });
+                                    """.trimIndent(),
+                                    null,
+                                )
+                            }
+
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 CookieManager.getInstance().flush()
                                 signedIn = Cookies.isSignedIn(site)

@@ -38,6 +38,11 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".service.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- Hands the downloaded APK to the package installer. -->
         <provider
             android:name="androidx.core.content.FileProvider"

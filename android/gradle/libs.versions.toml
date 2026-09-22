@@ -11,6 +11,7 @@ composeIcons = "1.7.8"
 navigation = "2.8.5"
 coroutines = "1.9.0"
 jna = "5.15.0"
+webkit = "1.17.0"
 media3 = "1.5.1"
 junit = "4.13.2"
 
@@ -31,6 +32,8 @@ androidx-navigation-compose = { group = "androidx.navigation", name = "navigatio
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 # UniFFI's generated Kotlin talks to the Rust .so through JNA.
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+# Brings the WebAuthn/passkey bridge; stock WebView cannot do passkeys at all.
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

@@ -12,77 +12,66 @@ import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import uniffi.magpie_core.MediaInfo
-import uniffi.magpie_core.Rendition
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
 import kotlin.coroutines.coroutineContext
 
-/** Progress for one job, reported at a human rate rather than per buffer. */
-data class Progress(
+/** A progress tick from a running job. */
+data class Tick(
+    val status: DownloadStatus,
     val stage: String,
-    val fraction: Float,
     val bytes: Long,
     val total: Long?,
     val bytesPerSecond: Long,
-) {
-    val etaSeconds: Long?
-        get() {
-            val t = total ?: return null
-            if (bytesPerSecond <= 0) return null
-            return ((t - bytes) / bytesPerSecond).coerceAtLeast(0)
-        }
-}
+)
 
 /**
- * Fetches the chosen renditions and lands a finished file in shared storage.
+ * Fetches a job's streams and lands a finished file in shared storage.
  *
- * All file work is deliberately on this side of the FFI: Android's scoped
- * storage is reached through MediaStore, and fighting that from native code
- * buys nothing. Merging uses the platform's own [MediaMuxer], so there is no
- * bundled ffmpeg and no root requirement — the streams are copied, never
- * re-encoded.
+ * File work stays on the Kotlin side: shared storage is reached through
+ * MediaStore, and merging uses the platform's own [MediaMuxer], so there is no
+ * bundled ffmpeg and no root. Streams are copied, never re-encoded.
  */
 class Downloader(private val context: Context) {
 
-    suspend fun download(
-        info: MediaInfo,
-        video: Rendition,
-        fileName: String,
-        onProgress: (Progress) -> Unit,
-    ): Uri = withContext(Dispatchers.IO) {
-        val cookie = Cookies.Site.of(info.source)?.let { Cookies.headerFor(it) }.orEmpty()
-        val needsAudio = !info.muxed && info.audio.isNotEmpty()
+    suspend fun run(job: DownloadJob, onTick: (Tick) -> Unit): Uri = withContext(Dispatchers.IO) {
+        val cookie = Cookies.Site.of(job.source)?.let { Cookies.headerFor(it) }.orEmpty()
+        val needsAudio = job.audioUrl != null
 
-        val videoFile = File(context.cacheDir, "dl-${info.mediaId}-v.mp4")
-        fetch(video.url, videoFile, cookie, "Downloading video", if (needsAudio) 0.75f else 1f, 0f, onProgress)
+        val videoFile = File(context.cacheDir, "dl-${job.id}-v.part")
+        val audioFile = File(context.cacheDir, "dl-${job.id}-a.part")
 
-        val finished: File
+        // Total is split between the two streams so the bar reflects real work.
+        val videoShare = if (needsAudio) 0.88f else 1f
+
+        fetch(job.videoUrl, videoFile, cookie, "Downloading video", videoShare, 0f, job, onTick)
         if (needsAudio) {
-            val audioFile = File(context.cacheDir, "dl-${info.mediaId}-a.mp4")
-            fetch(info.audio.first().url, audioFile, cookie, "Downloading audio", 0.2f, 0.75f, onProgress)
-
-            onProgress(Progress("Merging", 0.96f, 0, null, 0))
-            finished = File(context.cacheDir, "dl-${info.mediaId}-out.mp4")
-            mux(videoFile, audioFile, finished)
-            videoFile.delete()
-            audioFile.delete()
-        } else {
-            finished = videoFile
+            fetch(job.audioUrl!!, audioFile, cookie, "Downloading audio", 0.1f, videoShare, job, onTick)
         }
 
-        onProgress(Progress("Saving", 0.98f, 0, null, 0))
-        val uri = publish(finished, fileName)
-        finished.delete()
-        onProgress(Progress("Done", 1f, 0, null, 0))
+        val merged: File
+        if (needsAudio) {
+            onTick(Tick(DownloadStatus.MERGING, "Merging", job.totalBytes ?: 0, job.totalBytes, 0))
+            merged = File(context.cacheDir, "dl-${job.id}-out.mp4")
+            mux(videoFile, audioFile, merged)
+        } else {
+            merged = videoFile
+        }
+
+        onTick(Tick(DownloadStatus.SAVING, "Saving", job.totalBytes ?: 0, job.totalBytes, 0))
+        val uri = publish(merged, job.fileName)
+
+        videoFile.delete(); audioFile.delete()
+        if (merged != videoFile) merged.delete()
         uri
     }
 
     /**
-     * Ranged, resumable GET. A dropped connection on a 300 MB lecture must not
-     * mean starting over.
+     * Ranged, resumable GET. A dropped connection — or a pause — on a 300 MB
+     * lecture must not mean starting over, so the partial file is kept and the
+     * next attempt asks for the remainder.
      */
     private suspend fun fetch(
         url: String,
@@ -91,7 +80,8 @@ class Downloader(private val context: Context) {
         stage: String,
         weight: Float,
         offset: Float,
-        onProgress: (Progress) -> Unit,
+        job: DownloadJob,
+        onTick: (Tick) -> Unit,
     ) {
         val have = if (target.exists()) target.length() else 0L
         var conn = open(url, cookie, have)
@@ -106,11 +96,12 @@ class Downloader(private val context: Context) {
         val start = if (resuming) have else 0L
         val remaining = conn.contentLengthLong.takeIf { it > 0 }
         val total = remaining?.plus(start)
+        val overall = job.totalBytes
 
         val began = System.nanoTime()
         var copied = start
-        var lastPercent = -1
-        var lastReport = 0L
+        var lastPct = -1
+        var lastAt = 0L
 
         try {
             conn.inputStream.use { input ->
@@ -125,13 +116,14 @@ class Downloader(private val context: Context) {
 
                         val elapsed = System.nanoTime() - began
                         val pct = total?.let { ((copied * 100) / it).toInt() } ?: -1
-                        if (pct != lastPercent || elapsed - lastReport >= REPORT_NANOS) {
-                            lastPercent = pct
-                            lastReport = elapsed
+                        if (pct != lastPct || elapsed - lastAt >= REPORT_NANOS) {
+                            lastPct = pct
+                            lastAt = elapsed
                             val secs = elapsed / 1_000_000_000.0
                             val rate = if (secs > 0) ((copied - start) / secs).toLong() else 0L
                             val frac = total?.let { (copied.toFloat() / it).coerceIn(0f, 1f) } ?: 0f
-                            onProgress(Progress(stage, offset + frac * weight, copied, total, rate))
+                            val done = overall?.let { ((offset + frac * weight) * it).toLong() } ?: copied
+                            onTick(Tick(DownloadStatus.DOWNLOADING, stage, done, overall ?: total, rate))
                         }
                     }
                 }
@@ -141,7 +133,7 @@ class Downloader(private val context: Context) {
         }
 
         if (total != null && target.length() < total) {
-            error("Download incomplete: ${target.length()} of $total bytes. Retry to resume.")
+            error("Transfer incomplete: ${target.length()} of $total bytes")
         }
     }
 
@@ -152,15 +144,16 @@ class Downloader(private val context: Context) {
             instanceFollowRedirects = true
             setRequestProperty("User-Agent", UA)
             setRequestProperty("Accept", "*/*")
-            setRequestProperty("Referer", "https://www.facebook.com/")
             if (cookie.isNotEmpty()) setRequestProperty("Cookie", cookie)
             if (from > 0) setRequestProperty("Range", "bytes=$from-")
-            if (responseCode !in 200..299 &&
-                responseCode != HttpURLConnection.HTTP_PARTIAL &&
-                responseCode != 416
-            ) {
-                val code = responseCode
+            val code = responseCode
+            if (code !in 200..299 && code != HttpURLConnection.HTTP_PARTIAL && code != 416) {
                 disconnect()
+                // 403 on a previously-good URL almost always means the signed
+                // CDN link has expired rather than that access was lost.
+                if (code == 403 || code == 410) {
+                    error("This link has expired — fetch the page again")
+                }
                 error("Server returned HTTP $code")
             }
         }
@@ -168,41 +161,38 @@ class Downloader(private val context: Context) {
     /** Stream-copy both inputs into one MP4. No transcode, so it is fast. */
     private fun mux(video: File, audio: File, out: File) {
         val muxer = MediaMuxer(out.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        val inputs = listOf(video, audio).map { file ->
-            MediaExtractor().apply { setDataSource(file.absolutePath) }
-        }
+        val inputs = listOf(video, audio).map { MediaExtractor().apply { setDataSource(it.absolutePath) } }
         try {
-            // Map each source track onto a muxer track before writing anything.
-            val mapping = mutableListOf<Triple<MediaExtractor, Int, Int>>()
-            var maxBuffer = 256 * 1024
-            inputs.forEach { ex ->
+            val mapping = mutableListOf<Pair<MediaExtractor, Int>>()
+            var maxBuffer = 512 * 1024
+            inputs.forEachIndexed { index, ex ->
                 for (i in 0 until ex.trackCount) {
                     val fmt = ex.getTrackFormat(i)
                     val mime = fmt.getString(MediaFormat.KEY_MIME).orEmpty()
-                    val wanted = (ex === inputs[0] && mime.startsWith("video/")) ||
-                        (ex === inputs[1] && mime.startsWith("audio/"))
+                    val wanted = (index == 0 && mime.startsWith("video/")) ||
+                        (index == 1 && mime.startsWith("audio/"))
                     if (!wanted) continue
                     if (fmt.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
                         maxBuffer = maxOf(maxBuffer, fmt.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
                     }
                     ex.selectTrack(i)
-                    mapping += Triple(ex, i, muxer.addTrack(fmt))
+                    mapping += ex to muxer.addTrack(fmt)
                 }
             }
             check(mapping.isNotEmpty()) { "Nothing to merge — no usable tracks" }
 
             muxer.start()
             val buffer = ByteBuffer.allocate(maxBuffer)
-            val bufferInfo = MediaCodec.BufferInfo()
-            mapping.forEach { (ex, _, outTrack) ->
+            val info = MediaCodec.BufferInfo()
+            mapping.forEach { (ex, track) ->
                 while (true) {
                     val size = ex.readSampleData(buffer, 0)
                     if (size < 0) break
-                    bufferInfo.offset = 0
-                    bufferInfo.size = size
-                    bufferInfo.presentationTimeUs = ex.sampleTime
-                    bufferInfo.flags = ex.sampleFlags
-                    muxer.writeSampleData(outTrack, buffer, bufferInfo)
+                    info.offset = 0
+                    info.size = size
+                    info.presentationTimeUs = ex.sampleTime
+                    info.flags = ex.sampleFlags
+                    muxer.writeSampleData(track, buffer, info)
                     ex.advance()
                 }
             }
@@ -213,7 +203,7 @@ class Downloader(private val context: Context) {
         }
     }
 
-    /** Publish into Downloads/Magpie via MediaStore — no storage permission needed. */
+    /** Publish into Downloads/Magpie via MediaStore — no storage permission. */
     private fun publish(file: File, fileName: String): Uri {
         val resolver = context.contentResolver
         val values = ContentValues().apply {

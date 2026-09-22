@@ -4,7 +4,6 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
@@ -12,16 +11,15 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.syed.magpie.data.Catalog
 import com.syed.magpie.data.Cookies
+import com.syed.magpie.data.DownloadEngine
 import com.syed.magpie.data.DownloadProgress
-import com.syed.magpie.data.Downloader
-import com.syed.magpie.data.Progress
 import com.syed.magpie.data.UpdateInfo
 import com.syed.magpie.data.UpdateService
 import com.syed.magpie.data.safeFileName
+import uniffi.magpie_core.Rendition
 import kotlinx.coroutines.launch
 import uniffi.magpie_core.MagpieException
 import uniffi.magpie_core.MediaInfo
-import uniffi.magpie_core.Rendition
 import java.io.File
 
 /** Where the link box is in its lifecycle. */
@@ -31,20 +29,6 @@ sealed interface ProbeState {
     data class Ready(val info: MediaInfo) : ProbeState
     data class NeedsLogin(val site: Cookies.Site) : ProbeState
     data class Failed(val message: String) : ProbeState
-}
-
-/** One row in the library. */
-data class DownloadJob(
-    val id: Long,
-    val title: String,
-    val quality: String,
-    val source: String,
-    var progress: Progress? = null,
-    var uri: Uri? = null,
-    var error: String? = null,
-    var task: kotlinx.coroutines.Job? = null,
-) {
-    val done get() = uri != null
 }
 
 sealed interface UpdateState {
@@ -64,14 +48,17 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var chooser by mutableStateOf<MediaInfo?>(null)
 
-    val jobs = mutableStateListOf<DownloadJob>()
+    /** The queue lives in the engine so it survives this ViewModel. */
+    val jobs = DownloadEngine.jobs
 
     var update by mutableStateOf<UpdateState>(UpdateState.Idle)
         private set
 
-    private val downloader = Downloader(app)
     private val updates = UpdateService(app)
-    private var nextId = 1L
+
+    init {
+        DownloadEngine.init(app)
+    }
 
     // ---- link handling -------------------------------------------------
 
@@ -127,36 +114,29 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
 
     fun start(info: MediaInfo, rendition: Rendition) {
         chooser = null
-        val job = DownloadJob(
-            id = nextId++,
+        val audio = if (info.muxed || info.audio.isEmpty()) null else info.audio.first()
+        DownloadEngine.enqueue(
+            sourceUrl = link.trim().ifEmpty { info.mediaId },
+            source = info.source,
             title = info.title,
             quality = rendition.label,
-            source = info.source,
+            renditionId = rendition.id,
+            videoUrl = rendition.url,
+            audioUrl = audio?.url,
+            fileName = safeFileName(info.title, rendition.label),
+            totalBytes = Catalog.totalBytes(info, rendition),
         )
-        jobs.add(0, job)
-        job.task = viewModelScope.launch {
-            runCatching {
-                downloader.download(info, rendition, safeFileName(info.title, rendition.label)) { p ->
-                    val i = jobs.indexOfFirst { it.id == job.id }
-                    if (i >= 0) jobs[i] = jobs[i].copy(progress = p)
-                }
-            }.onSuccess { uri ->
-                val i = jobs.indexOfFirst { it.id == job.id }
-                if (i >= 0) jobs[i] = jobs[i].copy(uri = uri, progress = null)
-            }.onFailure { e ->
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                val i = jobs.indexOfFirst { it.id == job.id }
-                if (i >= 0) jobs[i] = jobs[i].copy(error = e.message ?: "Download failed", progress = null)
-            }
-        }
         link = ""
         probe = ProbeState.Idle
     }
 
-    fun cancel(job: DownloadJob) {
-        job.task?.cancel()
-        jobs.removeAll { it.id == job.id }
-    }
+    fun pause(id: String) = DownloadEngine.pause(id)
+
+    fun resume(id: String) = DownloadEngine.resume(id)
+
+    fun cancel(id: String) = DownloadEngine.cancel(id)
+
+    fun clearFinished() = DownloadEngine.clearFinished()
 
     fun open(uri: Uri) {
         val intent = Intent(Intent.ACTION_VIEW)
