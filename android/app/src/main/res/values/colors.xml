@@ -3,6 +3,14 @@
     <color name="cream">#F4F1EB</color>
     <color name="ink">#282828</color>
     <color name="coral">#FFA371</color>
+    <!-- Notification accents, kept in step with ui/theme/Color.kt.
+
+         The shade paints the accent as a small icon tint and app-name label on
+         its own background, not as a surface, so the light-theme value is the
+         palette's deeper coral: the UI's #FFA371 washes out to near-invisible
+         at that size on white. values-night swaps it back. -->
+    <color name="notification_accent">#E8834D</color>
+    <color name="danger">#C5533F</color>
     <!-- Base declaration required: a resource that exists only in values-night
          crashes when queried in any other configuration. -->
     <color name="night_bg">#17150F</color>

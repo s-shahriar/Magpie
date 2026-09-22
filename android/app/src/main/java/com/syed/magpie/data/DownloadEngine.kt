@@ -51,6 +51,7 @@ object DownloadEngine {
         store = DownloadStore(appContext)
         downloader = Downloader(appContext)
         _jobs.value = store.load()
+        sweepOrphans()
     }
 
     // ---- queue control -------------------------------------------------
@@ -93,10 +94,18 @@ object DownloadEngine {
         pump()
     }
 
+    /**
+     * Removes a job and every byte it was holding.
+     *
+     * A finished job's saved file in Downloads is deliberately left alone —
+     * that is the thing the user asked for. Anything still in flight or paused
+     * is scratch, and goes.
+     */
     fun cancel(id: String) = scope.launch {
         lock.withLock { running.remove(id) }?.cancelAndJoin()
         partials(id).forEach { it.delete() }
         update { list -> list.filterNot { it.id == id } }
+        sweepOrphans()
         pump()
     }
 
@@ -200,9 +209,34 @@ object DownloadEngine {
         }
     }
 
+    /**
+     * Every scratch file a job can own.
+     *
+     * The `.chunks` bitmaps belong here too: the segmented fetch preallocates
+     * its `.part` to the full size, so a cancelled 1080p job that left these
+     * behind would strand a couple of hundred megabytes in app storage.
+     */
     internal fun partials(id: String): List<File> = listOf(
-        File(appContext.cacheDir, "dl-$id-v.part"),
-        File(appContext.cacheDir, "dl-$id-a.part"),
-        File(appContext.cacheDir, "dl-$id-out.mp4"),
-    )
+        "dl-$id-v.part",
+        "dl-$id-v.part.chunks",
+        "dl-$id-a.part",
+        "dl-$id-a.part.chunks",
+        "dl-$id-out.mp4",
+    ).map { File(appContext.cacheDir, it) }
+
+    /**
+     * Deletes scratch files with no job behind them.
+     *
+     * Covers anything a crash, a force-stop mid-write, or an older build left
+     * behind — none of which route through [cancel].
+     */
+    private fun sweepOrphans() {
+        val live = _jobs.value.map { it.id }.toSet()
+        runCatching {
+            appContext.cacheDir.listFiles()
+                ?.filter { it.name.startsWith("dl-") }
+                ?.filterNot { f -> live.any { f.name.startsWith("dl-$it-") } }
+                ?.forEach { it.delete() }
+        }
+    }
 }

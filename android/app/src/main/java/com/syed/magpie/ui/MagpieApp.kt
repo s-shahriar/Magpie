@@ -36,6 +36,11 @@ fun MagpieApp(vm: MagpieViewModel) {
     var tab by remember { mutableStateOf(Tab.Fetch) }
     var login by remember { mutableStateOf<Cookies.Site?>(null) }
 
+    // A notification tap asks for the queue, whatever tab was last open.
+    LaunchedEffect(vm.libraryRequest) {
+        if (vm.libraryRequest > 0) tab = Tab.Library
+    }
+
     val site = login
     if (site != null) {
         LoginScreen(site) {

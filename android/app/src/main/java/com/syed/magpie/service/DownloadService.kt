@@ -1,20 +1,13 @@
 package com.syed.magpie.service
 
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
-import com.syed.magpie.MainActivity
-import com.syed.magpie.R
 import com.syed.magpie.data.DownloadEngine
+import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadStatus
-import com.syed.magpie.data.formatBytes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,101 +21,97 @@ import kotlinx.coroutines.launch
  * Android will freeze or kill an app's work shortly after it leaves the
  * foreground, and these are multi-hundred-megabyte files over a phone
  * connection. The service does no work itself — [DownloadEngine] owns the
- * queue — it exists to hold the process up and show progress.
+ * queue — it exists to hold the process up and to be the voice of the queue in
+ * the notification shade: progress while something is running, and a lasting
+ * row per file once it is saved or has failed.
  */
 class DownloadService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private lateinit var notifier: DownloadNotifier
+
+    /**
+     * Last seen status per job, so a terminal notification is posted on the
+     * transition rather than on every re-emission of the list.
+     */
+    private var seen: Map<String, DownloadStatus>? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         DownloadEngine.init(this)
-        createChannel()
-        startForegroundCompat(build(null))
+        notifier = DownloadNotifier(this)
+        notifier.ensureChannels()
+        post(notifier.progress(emptyList()))
         scope.launch {
             DownloadEngine.jobs.collectLatest { jobs ->
-                val active = jobs.filter { it.status.active || it.status == DownloadStatus.QUEUED }
-                if (active.isEmpty()) {
+                announce(jobs)
+                val busy = jobs.any { it.status.active || it.status == DownloadStatus.QUEUED }
+                if (busy) {
+                    post(notifier.progress(jobs))
+                } else {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
-                } else {
-                    notifier().notify(ID, build(jobs))
                 }
             }
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    /** Notification actions arrive here; the engine already guards the rest. */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val id = intent?.getStringExtra(EXTRA_JOB_ID)
+        if (id != null) {
+            when (intent.action) {
+                ACTION_PAUSE -> DownloadEngine.pause(id)
+                ACTION_CANCEL -> DownloadEngine.cancel(id)
+            }
+        }
+        return START_STICKY
+    }
 
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()
     }
 
-    private fun build(jobs: List<com.syed.magpie.data.DownloadJob>?): Notification {
-        val running = jobs?.firstOrNull { it.status.active }
-        val queued = jobs?.count { it.status == DownloadStatus.QUEUED } ?: 0
+    /**
+     * Posts one row per job that has just finished, and takes back the row of
+     * any job that has left a terminal state — retried, or cleared from the
+     * Library — so the shade never contradicts the app.
+     *
+     * The first emission only seeds the map: jobs restored from disk at launch
+     * finished in some earlier session and must not re-announce themselves.
+     */
+    private fun announce(jobs: List<DownloadJob>) {
+        val previous = seen
+        val current = jobs.associate { it.id to it.status }
+        seen = current
+        if (previous == null) return
 
-        val title = running?.title ?: "Preparing downloads"
-        val text = when {
-            running == null -> "Starting"
-            running.totalBytes != null -> buildString {
-                append(running.stage)
-                append(" · ${formatBytes(running.downloadedBytes)} / ${formatBytes(running.totalBytes!!)}")
-                if (queued > 0) append(" · $queued queued")
-            }
-            else -> running.stage
-        }
+        // A row removed from the Library takes its notification with it.
+        (previous.keys - current.keys).forEach { notifier.clear(it) }
 
-        val tap = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-
-        return NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setSmallIcon(R.drawable.ic_stat_download)
-            .setOngoing(true)
-            .setSilent(true)
-            .setOnlyAlertOnce(true)
-            .setContentIntent(tap)
-            .apply {
-                val pct = running?.let { (it.fraction * 100).toInt() }
-                if (pct != null && running.totalBytes != null) {
-                    setProgress(100, pct, running.status != DownloadStatus.DOWNLOADING)
-                } else {
-                    setProgress(0, 0, true)
+        jobs.forEach { job ->
+            val before = previous[job.id]
+            if (before == job.status) return@forEach
+            when (job.status) {
+                DownloadStatus.COMPLETED -> notifier.saved(job)
+                DownloadStatus.FAILED -> notifier.failed(job)
+                else -> if (before == DownloadStatus.COMPLETED || before == DownloadStatus.FAILED) {
+                    notifier.clear(job.id)
                 }
             }
-            .build()
-    }
-
-    private fun startForegroundCompat(n: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(ID, n)
         }
     }
 
-    private fun notifier() = getSystemService(NotificationManager::class.java)
-
-    private fun createChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val ch = NotificationChannel(CHANNEL, "Downloads", NotificationManager.IMPORTANCE_LOW).apply {
-            description = "Progress for files Magpie is fetching"
-            setShowBadge(false)
-        }
-        notifier().createNotificationChannel(ch)
-    }
+    /** minSdk 31, so the typed form is always the right one. */
+    private fun post(n: Notification) =
+        startForeground(DownloadNotifier.ID_PROGRESS, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
 
     companion object {
-        private const val CHANNEL = "magpie.downloads"
-        private const val ID = 4201
+        const val EXTRA_JOB_ID = "jobId"
+        const val ACTION_PAUSE = "com.syed.magpie.action.PAUSE"
+        const val ACTION_CANCEL = "com.syed.magpie.action.CANCEL"
     }
 }

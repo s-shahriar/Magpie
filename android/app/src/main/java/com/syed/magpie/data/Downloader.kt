@@ -46,9 +46,13 @@ class Downloader(private val context: Context) {
         // Total is split between the two streams so the bar reflects real work.
         val videoShare = if (needsAudio) 0.88f else 1f
 
-        fetch(job.videoUrl, videoFile, cookie, "Downloading video", videoShare, 0f, job, onTick)
+        // Both passes report the same stage. Which stream is on the wire is
+        // an implementation detail — the bar covers the pair as one job, so
+        // saying "Downloading audio" only raises a question about a file the
+        // user asked for as a video.
+        fetch(job.videoUrl, videoFile, cookie, "Downloading", videoShare, 0f, job, onTick)
         if (needsAudio) {
-            fetch(job.audioUrl!!, audioFile, cookie, "Downloading audio", 0.1f, videoShare, job, onTick)
+            fetch(job.audioUrl!!, audioFile, cookie, "Downloading", 0.1f, videoShare, job, onTick)
         }
 
         val merged: File
@@ -83,6 +87,30 @@ class Downloader(private val context: Context) {
         job: DownloadJob,
         onTick: (Tick) -> Unit,
     ) {
+        // Several connections when the server allows it: a single response
+        // from Drive is throttled to about playback speed regardless of the
+        // link, so one stream is the bottleneck rather than the network.
+        val probe = SegmentedFetch.probe(url, cookie)
+        if (SegmentedFetch.worthIt(probe)) {
+            val size = probe.total!!
+            val began = System.nanoTime()
+            val written = java.util.concurrent.atomic.AtomicLong(0)
+            var lastAt = 0L
+            SegmentedFetch.fetch(url, target, cookie, size) { delta ->
+                val now = written.addAndGet(delta)
+                val elapsed = System.nanoTime() - began
+                if (elapsed - lastAt >= REPORT_NANOS) {
+                    lastAt = elapsed
+                    val secs = elapsed / 1_000_000_000.0
+                    val rate = if (secs > 0) (now / secs).toLong() else 0L
+                    val frac = (now.toFloat() / size).coerceIn(0f, 1f)
+                    val done = overallOf(job)?.let { ((offset + frac * weight) * it).toLong() } ?: now
+                    onTick(Tick(DownloadStatus.DOWNLOADING, stage, done, overallOf(job) ?: size, rate))
+                }
+            }
+            return
+        }
+
         val have = if (target.exists()) target.length() else 0L
         var conn = open(url, cookie, have)
 
@@ -224,6 +252,8 @@ class Downloader(private val context: Context) {
         return uri
     }
 
+    private fun overallOf(job: DownloadJob): Long? = job.totalBytes
+
     companion object {
         const val UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
@@ -232,8 +262,19 @@ class Downloader(private val context: Context) {
     }
 }
 
-/** Strip characters MediaStore will not accept in a display name. */
+/**
+ * Build a display name MediaStore will accept.
+ *
+ * Drive titles usually already carry the container extension, so naming
+ * naively produced "Class 09 ….mp4 [360p].mp4". The existing extension is
+ * dropped before the quality tag is appended.
+ */
 fun safeFileName(title: String, quality: String): String {
-    val base = title.replace(Regex("""[/\\:*?"<>|]"""), "-").trim().take(90).ifEmpty { "magpie" }
+    val cleaned = title.replace(Regex("""[/\\:*?"<>|]"""), "-").trim()
+    val base = cleaned
+        .replace(Regex("""\.(mp4|mkv|mov|m4v|webm|avi)$""", RegexOption.IGNORE_CASE), "")
+        .trim()
+        .take(90)
+        .ifEmpty { "magpie" }
     return "$base [$quality].mp4"
 }

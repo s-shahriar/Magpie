@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- On the dark shade the deeper coral goes muddy; the UI's own accent is
+         the legible one there, exactly as it is in the app at night. -->
+    <color name="notification_accent">#FFA371</color>
     <color name="night_bg">#17150F</color>
 </resources>

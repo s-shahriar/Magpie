@@ -66,10 +66,13 @@ data class DownloadJob(
         put("fileName", fileName)
         put("totalBytes", totalBytes ?: JSONObject.NULL)
         // A job interrupted mid-flight comes back as paused, never as running:
-        // nothing is actually downloading when the process starts again.
-        put("status", if (status.active) DownloadStatus.PAUSED.name else status.name)
+        // nothing is actually downloading when the process starts again. The
+        // stage label has to move with it, or a restored job sits there
+        // claiming to be "Downloading" beside a resume button.
+        val restored = if (status.active) DownloadStatus.PAUSED else status
+        put("status", restored.name)
         put("downloadedBytes", downloadedBytes)
-        put("stage", stage)
+        put("stage", if (restored != status) "Paused" else stage)
         put("error", error ?: JSONObject.NULL)
         put("outputUri", outputUri ?: JSONObject.NULL)
         put("createdAt", createdAt)

@@ -54,6 +54,16 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
     var update by mutableStateOf<UpdateState>(UpdateState.Idle)
         private set
 
+    /**
+     * Bumped whenever something outside the UI — a tap on a download
+     * notification — asks for the queue. A counter rather than a flag so two
+     * taps in a row both land, even if the user has since moved tabs.
+     */
+    var libraryRequest by mutableStateOf(0)
+        private set
+
+    fun showLibrary() { libraryRequest++ }
+
     private val updates = UpdateService(app)
 
     init {
