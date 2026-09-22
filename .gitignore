@@ -1,0 +1,22 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.kotlin/
+android/app/src/main/jniLibs/
+.idea/
+*.iml
+captures/
+
+# Signing — never commit these
+android/keystore.properties
+*.jks
+*.keystore
+
+# Release artifacts are attached to GitHub releases, not tracked
+*.apk

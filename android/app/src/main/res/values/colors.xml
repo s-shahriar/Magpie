@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="cream">#F4F1EB</color>
+    <color name="ink">#282828</color>
+    <color name="coral">#FFA371</color>
+    <!-- Base declaration required: a resource that exists only in values-night
+         crashes when queried in any other configuration. -->
+    <color name="night_bg">#17150F</color>
+</resources>

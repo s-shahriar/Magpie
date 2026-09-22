@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["core", "cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/s-shahriar/Magpie"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+# Not stripped: UniFFI reads its interface metadata out of the library's
+# symbols, and `strip = true` makes `uniffi-bindgen --library` silently emit
+# nothing. Not `panic = "abort"` either — UniFFI catches panics at the FFI
+# boundary and turns them into errors, which abort would defeat.
+strip = false
