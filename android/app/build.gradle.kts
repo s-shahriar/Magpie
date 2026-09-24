@@ -165,6 +165,8 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.webkit)
+    implementation(libs.androidx.media3.muxer)
+    implementation(libs.androidx.media3.common)
     implementation(libs.jna) { artifact { type = "aar" } }
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)

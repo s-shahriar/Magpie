@@ -34,6 +34,11 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 # Brings the WebAuthn/passkey bridge; stock WebView cannot do passkeys at all.
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
+# Media3's own MP4 writer. The platform MediaMuxer refuses to put VP9 (or AV1,
+# or Opus) in an MP4 although the container allows it, and Facebook now serves
+# whole videos in a VP9-only ladder. This one writes them.
+androidx-media3-muxer = { group = "androidx.media3", name = "media3-muxer", version.ref = "media3" }
+androidx-media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

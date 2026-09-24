@@ -224,13 +224,20 @@ object DownloadEngine {
      * its `.part` to the full size, so a cancelled 1080p job that left these
      * behind would strand a couple of hundred megabytes in app storage.
      */
-    internal fun partials(id: String): List<File> = listOf(
-        "dl-$id-v.part",
-        "dl-$id-v.part.chunks",
-        "dl-$id-a.part",
-        "dl-$id-a.part.chunks",
-        "dl-$id-out.mp4",
-    ).map { File(appContext.cacheDir, it) }
+    internal fun partials(id: String): List<File> {
+        val names = listOf(
+            "dl-$id-v.part",
+            "dl-$id-v.part.chunks",
+            "dl-$id-a.part",
+            "dl-$id-a.part.chunks",
+            "dl-$id-out.mp4",
+        )
+        // Both homes: partials moved out of the cache once the system started
+        // reclaiming them mid-download, and a queue restored from an older
+        // build still has files sitting in the old one.
+        return names.map { File(Downloader.partsDir(appContext), it) } +
+            names.map { File(appContext.cacheDir, it) }
+    }
 
     /**
      * Deletes scratch files with no job behind them.
@@ -241,10 +248,12 @@ object DownloadEngine {
     private fun sweepOrphans() {
         val live = _jobs.value.map { it.id }.toSet()
         runCatching {
-            appContext.cacheDir.listFiles()
-                ?.filter { it.name.startsWith("dl-") }
-                ?.filterNot { f -> live.any { f.name.startsWith("dl-$it-") } }
-                ?.forEach { it.delete() }
+            listOf(Downloader.partsDir(appContext), appContext.cacheDir).forEach { dir ->
+                dir.listFiles()
+                    ?.filter { it.name.startsWith("dl-") }
+                    ?.filterNot { f -> live.any { f.name.startsWith("dl-$it-") } }
+                    ?.forEach { it.delete() }
+            }
         }
     }
 }

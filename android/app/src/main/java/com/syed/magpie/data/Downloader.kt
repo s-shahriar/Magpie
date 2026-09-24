@@ -5,18 +5,39 @@ import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.media.MediaMuxer
+import androidx.annotation.OptIn
+import androidx.media3.common.util.MediaFormatUtil
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.muxer.Mp4Muxer
+import androidx.media3.muxer.Muxer.TrackToken
 import android.net.Uri
 import android.os.Environment
+import android.os.StatFs
 import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
 import kotlin.coroutines.coroutineContext
+
+/**
+ * Codecs the muxer will not write into MP4.
+ *
+ * Short list, because merging no longer goes through the platform's
+ * [android.media.MediaMuxer] — which rejects VP9 although the MP4 container
+ * has held it for years, and Facebook now publishes whole videos in a VP9-only
+ * ladder. Media3's writer takes AV1, H.263, H.264, H.265, MPEG-4 and VP9 with
+ * AAC, AMR, Opus or Vorbis; what is left over is listed here so a stream it
+ * cannot take fails by name rather than blindly.
+ */
+private val UNMUXABLE = mapOf(
+    "video/x-vnd.on2.vp8" to "VP8",
+    "audio/flac" to "FLAC audio",
+)
 
 /** A progress tick from a running job. */
 data class Tick(
@@ -31,8 +52,8 @@ data class Tick(
  * Fetches a job's streams and lands a finished file in shared storage.
  *
  * File work stays on the Kotlin side: shared storage is reached through
- * MediaStore, and merging uses the platform's own [MediaMuxer], so there is no
- * bundled ffmpeg and no root. Streams are copied, never re-encoded.
+ * MediaStore, and merging uses Media3's MP4 writer, so there is no bundled
+ * ffmpeg and no root. Streams are copied, never re-encoded.
  */
 class Downloader(private val context: Context) {
 
@@ -40,8 +61,9 @@ class Downloader(private val context: Context) {
         val cookie = Cookies.Site.of(job.source)?.let { Cookies.headerFor(it) }.orEmpty()
         val needsAudio = job.audioUrl != null
 
-        val videoFile = File(context.cacheDir, "dl-${job.id}-v.part")
-        val audioFile = File(context.cacheDir, "dl-${job.id}-a.part")
+        val videoFile = partFile(context, job.id, "v")
+        val audioFile = partFile(context, job.id, "a")
+        ensureSpace(job, videoFile, audioFile)
 
         // Total is split between the two streams so the bar reflects real work.
         val videoShare = if (needsAudio) 0.88f else 1f
@@ -202,7 +224,15 @@ class Downloader(private val context: Context) {
      * Stream-copy both inputs into one MP4. No transcode, so the cost is
      * almost entirely moving bytes — which is why it is worth not moving them
      * twice.
+     *
+     * The writer is Media3's, not the platform's. `MediaMuxer` refuses any
+     * video it was not taught about — VP9 included, though MP4 has carried VP9
+     * for years and this phone plays it happily — and a VP9-only ladder is
+     * exactly what Facebook now serves for some videos. Media3's `Mp4Muxer` is
+     * the same stream copy with a wider list, so the merge stops being the
+     * thing that decides which videos can be saved.
      */
+    @OptIn(UnstableApi::class)
     private fun mux(
         video: File,
         audio: File,
@@ -210,10 +240,18 @@ class Downloader(private val context: Context) {
         expected: Long?,
         onProgress: (Long, Long?) -> Unit,
     ) {
-        val muxer = MediaMuxer(target, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        val inputs = listOf(video, audio).map { MediaExtractor().apply { setDataSource(it.absolutePath) } }
+        val muxer = Mp4Muxer.Builder(FileOutputStream(target)).build()
+        // A CDN that answered with an error page, or a transfer cut short,
+        // lands here as "Failed to instantiate extractor" — true, and useless.
+        val inputs = listOf(video, audio).map {
+            try {
+                MediaExtractor().apply { setDataSource(it.absolutePath) }
+            } catch (e: Exception) {
+                error("The downloaded stream could not be read — remove this row and fetch the link again")
+            }
+        }
         try {
-            val mapping = mutableListOf<Pair<MediaExtractor, Int>>()
+            val mapping = mutableListOf<Pair<MediaExtractor, TrackToken>>()
             var maxBuffer = 512 * 1024
             inputs.forEachIndexed { index, ex ->
                 for (i in 0 until ex.trackCount) {
@@ -222,23 +260,41 @@ class Downloader(private val context: Context) {
                     val wanted = (index == 0 && mime.startsWith("video/")) ||
                         (index == 1 && mime.startsWith("audio/"))
                     if (!wanted) continue
+                    // A muxer's own complaint is "Failed to add the track",
+                    // which says nothing about the cause. The picker already
+                    // hides these, so reaching this line means a codec the
+                    // core could not name from its tag.
+                    UNMUXABLE[mime]?.let {
+                        error("Android cannot put $it in an MP4 beside an audio track")
+                    }
                     if (fmt.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
                         maxBuffer = maxOf(maxBuffer, fmt.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
                     }
                     ex.selectTrack(i)
-                    mapping += ex to muxer.addTrack(fmt)
+                    mapping += ex to muxer.addTrack(MediaFormatUtil.createFormatFromMediaFormat(fmt))
                 }
             }
             check(mapping.isNotEmpty()) { "Nothing to merge — no usable tracks" }
 
-            muxer.start()
-            val buffer = ByteBuffer.allocate(maxBuffer)
+            var buffer = ByteBuffer.allocate(maxBuffer)
             val info = MediaCodec.BufferInfo()
             var copied = 0L
             var lastReport = 0L
             mapping.forEach { (ex, track) ->
                 while (true) {
-                    val size = ex.readSampleData(buffer, 0)
+                    // A sample larger than the buffer is refused, not
+                    // truncated, and not every track declares its maximum
+                    // input size. Grow and read the same sample again.
+                    val size = try {
+                        ex.readSampleData(buffer, 0)
+                    } catch (e: IllegalArgumentException) {
+                        val next = buffer.capacity() * 2
+                        check(next <= MAX_SAMPLE) {
+                            "A single frame is too large to copy (over ${formatBytes(MAX_SAMPLE.toLong())})"
+                        }
+                        buffer = ByteBuffer.allocate(next)
+                        continue
+                    }
                     if (size < 0) break
                     info.offset = 0
                     info.size = size
@@ -255,10 +311,12 @@ class Downloader(private val context: Context) {
                     }
                 }
             }
-            muxer.stop()
+            // close() is what writes the index — a file that is never closed
+            // is a pile of samples no player will open.
+            muxer.close()
             onProgress(expected ?: copied, expected)
         } finally {
-            runCatching { muxer.release() }
+            runCatching { muxer.close() }
             inputs.forEach { runCatching { it.release() } }
         }
     }
@@ -300,6 +358,28 @@ class Downloader(private val context: Context) {
         return uri
     }
 
+    /**
+     * Refuses a job that cannot fit before spending an hour finding out.
+     *
+     * Twice the finished size, because the partials and the output are alive
+     * at the same time: the merge writes the MP4 while both `.part` files are
+     * still on disk, and the single-stream path copies rather than moves.
+     * Whatever is already downloaded counts towards it, so a resumed job is
+     * not asked for space it has already spent.
+     */
+    private fun ensureSpace(job: DownloadJob, vararg partials: File) {
+        val total = job.totalBytes ?: return
+        val have = partials.sumOf { if (it.exists()) it.length() else 0L }
+        val need = (total * 2) - have + HEADROOM
+        val free = StatFs(context.filesDir.path).availableBytes
+        if (free < need) {
+            error(
+                "Not enough space — this needs about ${formatBytes(need)} " +
+                    "and ${formatBytes(free)} is free",
+            )
+        }
+    }
+
     private fun overallOf(job: DownloadJob): Long? = job.totalBytes
 
     companion object {
@@ -307,6 +387,21 @@ class Downloader(private val context: Context) {
             "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
         private const val BUFFER = 64 * 1024
         private const val REPORT_NANOS = 400_000_000L
+        private const val MAX_SAMPLE = 64 * 1024 * 1024
+        private const val HEADROOM = 128L * 1024 * 1024
+
+        /**
+         * Where a half-finished download waits.
+         *
+         * `filesDir`, not `cacheDir`: Android empties the cache when storage
+         * runs low, and a two-hour lecture sitting at 80% is exactly the fat
+         * file it would pick. Losing it mid-flight meant starting over.
+         */
+        fun partsDir(context: Context): File =
+            File(context.filesDir, "parts").apply { mkdirs() }
+
+        fun partFile(context: Context, id: String, kind: String): File =
+            File(partsDir(context), "dl-$id-$kind.part")
     }
 }
 

@@ -69,6 +69,10 @@ private val Dark = darkColorScheme(
     outline = NightLine,
     outlineVariant = NightLine,
     error = Danger,
+    // Set explicitly: a dialog's destructive button sits on this, and the
+    // stock dark container is a red that belongs to no part of this palette.
+    errorContainer = Color(0xFF3E201A),
+    onErrorContainer = Color(0xFFEFB9AC),
 )
 
 /** Generous radii — the mockup's cards are pill-soft, not boxy. */

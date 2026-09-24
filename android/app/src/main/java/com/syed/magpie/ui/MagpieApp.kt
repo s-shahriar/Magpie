@@ -89,7 +89,7 @@ fun MagpieApp(vm: MagpieViewModel) {
     vm.chooser?.let { info ->
         QualitySheet(
             info = info,
-            onPick = { vm.start(info, it) },
+            onPick = { rendition, name -> vm.start(info, rendition, name) },
             onDismiss = vm::dismissChooser,
         )
     }

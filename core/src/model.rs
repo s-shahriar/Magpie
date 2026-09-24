@@ -49,6 +49,10 @@ pub struct StreamFacts {
     pub is_audio: bool,
     pub bitrate: u64,
     pub duration_secs: u64,
+    /// "h264", "vp9", "av1", "aac"… read out of the tag, `None` when the tag
+    /// does not name one. The caller needs it to know whether the platform can
+    /// merge this stream with its counterpart.
+    pub codec: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]

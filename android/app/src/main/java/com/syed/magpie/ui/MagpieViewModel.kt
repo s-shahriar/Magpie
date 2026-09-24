@@ -18,6 +18,7 @@ import com.syed.magpie.data.DownloadProgress
 import com.syed.magpie.data.UpdateInfo
 import com.syed.magpie.data.UpdateService
 import com.syed.magpie.data.safeFileName
+import com.syed.magpie.data.selfContained
 import uniffi.magpie_core.Rendition
 import kotlinx.coroutines.launch
 import uniffi.magpie_core.MagpieException
@@ -97,6 +98,15 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             Catalog.probe(url)
                 .onSuccess {
+                    // Everything on offer may be a codec this device cannot
+                    // merge. Better to say so now than after a gigabyte.
+                    if (Catalog.usableVideo(it).isEmpty()) {
+                        probe = ProbeState.Failed(
+                            "This video is only offered in a format Android " +
+                                "cannot merge with its audio track.",
+                        )
+                        return@onSuccess
+                    }
                     probe = ProbeState.Ready(it)
                     chooser = it
                 }
@@ -138,18 +148,26 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- downloads -----------------------------------------------------
 
-    fun start(info: MediaInfo, rendition: Rendition) {
+    /** [name] is whatever the picker was left showing — see QualitySheet. */
+    fun start(info: MediaInfo, rendition: Rendition, name: String = info.title) {
         chooser = null
-        val audio = if (info.muxed || info.audio.isEmpty()) null else info.audio.first()
+        val chosen = name.trim().ifEmpty { info.title }
+        // A progressive MP4 brings its own audio; only a DASH rendition needs
+        // the separate track fetched and merged alongside it.
+        val audio = if (rendition.selfContained || info.muxed || info.audio.isEmpty()) {
+            null
+        } else {
+            info.audio.first()
+        }
         DownloadEngine.enqueue(
             sourceUrl = link.trim().ifEmpty { info.mediaId },
             source = info.source,
-            title = info.title,
+            title = chosen,
             quality = rendition.label,
             renditionId = rendition.id,
             videoUrl = rendition.url,
             audioUrl = audio?.url,
-            fileName = safeFileName(info.title, rendition.label),
+            fileName = safeFileName(chosen, rendition.label),
             totalBytes = Catalog.totalBytes(info, rendition),
         )
         link = ""
@@ -175,7 +193,10 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
             approxBytes = c.approxBytes?.toULong(),
             exactSize = false,
             mime = null,
-            codec = null,
+            // Captured streams carry the same vencode tag the page does, so
+            // the core can name the codec here too — without it the VP9 rows
+            // would sail past the filter and die at the muxer.
+            codec = c.facts.codec,
             url = c.url,
         )
 
@@ -190,6 +211,15 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
             muxed = audios.isEmpty(),
         )
         link = sourceUrl
+        // Same gate as the probe path: a capture that only caught a VP9
+        // ladder would otherwise open an empty picker.
+        if (Catalog.usableVideo(info).isEmpty()) {
+            probe = ProbeState.Failed(
+                "This video is only offered in a format Android cannot merge " +
+                    "with its audio track.",
+            )
+            return
+        }
         chooser = info
         probe = ProbeState.Ready(info)
     }

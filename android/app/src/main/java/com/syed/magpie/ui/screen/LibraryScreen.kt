@@ -20,7 +20,6 @@ import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -28,7 +27,6 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,52 +43,63 @@ import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadStatus
 import com.syed.magpie.data.formatBytes
 import com.syed.magpie.ui.MagpieViewModel
+import com.syed.magpie.ui.component.DialogAction
+import com.syed.magpie.ui.component.MagpieDialog
 
 @Composable
 fun LibraryScreen(vm: MagpieViewModel, modifier: Modifier = Modifier) {
     val jobs by vm.jobs.collectAsStateWithLifecycle()
     var confirming by remember { mutableStateOf<DownloadJob?>(null) }
+    var clearing by remember { mutableStateOf(false) }
+    val finished = jobs.count { it.status == DownloadStatus.COMPLETED }
+
+    if (clearing) {
+        MagpieDialog(
+            title = "Clear finished downloads?",
+            message = "${if (finished == 1) "One saved video" else "$finished saved videos"} " +
+                "will leave this list. The files stay in Downloads/Magpie.",
+            primary = DialogAction("Clear list") {
+                vm.clearFinished()
+                clearing = false
+            },
+            onDismiss = { clearing = false },
+        )
+    }
 
     confirming?.let { job ->
-        AlertDialog(
-            onDismissRequest = { confirming = null },
-            title = { Text("Delete this video?") },
-            text = {
-                Text(
-                    "\u201c${job.title}\u201d will be removed from Downloads/Magpie. " +
-                        "This cannot be undone.",
-                )
+        MagpieDialog(
+            title = "Delete this video?",
+            subject = job.title,
+            message = "It will be removed from Downloads/Magpie. This cannot be undone.",
+            primary = DialogAction("Delete video", destructive = true) {
+                vm.deleteWithFile(job)
+                confirming = null
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    vm.deleteWithFile(job)
-                    confirming = null
-                }) { Text("Delete video", color = MaterialTheme.colorScheme.error) }
+            secondary = DialogAction("Remove from list only") {
+                vm.cancel(job.id)
+                confirming = null
             },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = {
-                        vm.cancel(job.id)
-                        confirming = null
-                    }) { Text("Remove from list") }
-                    TextButton(onClick = { confirming = null }) { Text("Cancel") }
-                }
-            },
+            onDismiss = { confirming = null },
         )
     }
 
     Column(modifier.fillMaxSize().padding(horizontal = 22.dp)) {
         Spacer(Modifier.height(30.dp))
-        Text(
-            "Library",
-            style = MaterialTheme.typography.displaySmall,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (jobs.any { it.status == DownloadStatus.COMPLETED }) {
-            Spacer(Modifier.height(2.dp))
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                IconButton(onClick = vm::clearFinished) {
+        // The title keeps the centre; the sweep sits in the corner where a
+        // screen action belongs, instead of hanging under the heading and
+        // pushing the whole list down whenever something finishes.
+        Box(Modifier.fillMaxWidth()) {
+            Text(
+                "Library",
+                style = MaterialTheme.typography.displaySmall,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().align(Alignment.Center),
+            )
+            if (finished > 0) {
+                IconButton(
+                    onClick = { clearing = true },
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                ) {
                     Icon(
                         Icons.Default.PlaylistRemove,
                         "Clear finished downloads",

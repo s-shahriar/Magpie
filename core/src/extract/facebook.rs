@@ -23,6 +23,18 @@ use serde::Deserialize;
 static BASE_URL: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#""base_url":"((?:[^"\\]|\\.)*)""#).unwrap());
 static EFG: Lazy<Regex> = Lazy::new(|| Regex::new(r"[?&]efg=([^&]+)").unwrap());
+/// The progressive MP4s Facebook still ships beside the DASH ladder.
+///
+/// These are single files with the audio already in them — H.264/AAC, the pair
+/// every Android muxer accepts. They matter because a growing number of videos
+/// are published with a VP9-only ladder, and VP9 cannot be written into an MP4
+/// next to AAC: without this fallback those videos cannot be saved at all.
+static PROGRESSIVE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#""(browser_native_hd_url|browser_native_sd_url|playable_url_quality_hd|playable_url|hd_src_no_ratelimit|sd_src_no_ratelimit|hd_src|sd_src)":"((?:[^"\\]|\\.)*)""#,
+    )
+    .unwrap()
+});
 static OG_TITLE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"<meta property="og:title" content="([^"]*)""#).unwrap());
 static OG_IMAGE: Lazy<Regex> =
@@ -66,6 +78,7 @@ pub fn describe(url: &str) -> Option<StreamFacts> {
         _ => return None,
     };
     let bitrate = efg.bitrate.unwrap_or(0);
+    let codec = codec_for(&tag);
     Some(StreamFacts {
         video_id,
         is_audio: tag.contains("audio"),
@@ -73,6 +86,7 @@ pub fn describe(url: &str) -> Option<StreamFacts> {
         tag,
         bitrate,
         duration_secs: efg.duration_s.unwrap_or(0.0) as u64,
+        codec,
     })
 }
 
@@ -151,7 +165,7 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
             approx_bytes: None,
             exact_size: false,
             mime: None,
-            codec: None,
+            codec: codec_for(&f.tag),
             url: f.url.clone(),
         };
         if is_audio {
@@ -161,11 +175,67 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
         }
     }
 
+    info.video.extend(progressive(&page, cookie));
+
     if info.video.is_empty() {
         return Err(MagpieError::NoMedia);
     }
     info.estimate_sizes();
     Ok(info)
+}
+
+/// Reads the progressive MP4s out of the page.
+///
+/// Position is the only thing that ties a URL to a video here — unlike a DASH
+/// `base_url`, these carry no `efg` — so only the first occurrence of each key
+/// is taken. That is the same assumption the DASH path already rests on: the
+/// post's own video is laid out before the sidebar reels.
+///
+/// The size comes from the server rather than from a bitrate estimate, because
+/// there is no bitrate to estimate from. A URL that will not answer a size
+/// probe is still offered: unlike Drive's view-only `source` download, nothing
+/// here is known to be blocked, and on a VP9-only video this row is the only
+/// way to get the file at all. It sorts last, as every unsized row does.
+fn progressive(page: &str, cookie: &str) -> Vec<Rendition> {
+    let mut out: Vec<Rendition> = Vec::new();
+    let mut seen_keys: Vec<String> = Vec::new();
+
+    for m in PROGRESSIVE.captures_iter(page) {
+        let key = m[1].to_string();
+        if seen_keys.contains(&key) {
+            continue;
+        }
+        seen_keys.push(key.clone());
+
+        let Ok(url) = serde_json::from_str::<String>(&format!("\"{}\"", &m[2])) else {
+            continue;
+        };
+        if !url.starts_with("http") {
+            continue;
+        }
+        // The same file is published under several names; one row each.
+        if out.iter().any(|r: &Rendition| r.url == url) {
+            continue;
+        }
+        let hd = key.contains("hd");
+        let bytes = http::content_length(&url, cookie);
+        out.push(Rendition {
+            id: format!("progressive-{}", if hd { "hd" } else { "sd" }),
+            label: if hd { "HD" } else { "SD" }.into(),
+            // "muxed": audio is already in the file, so nothing is merged and
+            // the muxer never runs.
+            kind: "muxed".into(),
+            width: None,
+            height: None,
+            bitrate: 0,
+            approx_bytes: bytes,
+            exact_size: bytes.is_some(),
+            mime: Some("video/mp4".into()),
+            codec: Some("h264".into()),
+            url,
+        });
+    }
+    out
 }
 
 fn collect(page: &str) -> Vec<Found> {
@@ -220,6 +290,43 @@ fn collect(page: &str) -> Vec<Found> {
 /// Facebook does not give pixel dimensions in `efg`, so the quality label is
 /// derived from bitrate. Rough, but it orders the list correctly and the exact
 /// size is shown beside it.
+/// Names the codec from the `vencode_tag`.
+///
+/// Facebook does not publish a codec field anywhere on the page, but it names
+/// the ladder in the tag it encodes each rendition under — `dash_vp9-basic…`,
+/// `dash_h264-basic…`. That is the only signal short of downloading the stream
+/// and reading its `stsd` box, and the caller needs it *before* it spends a
+/// gigabyte: Android's MediaMuxer cannot write VP9 or AV1 into MP4, so a
+/// rendition from those ladders can be fetched but never merged with its audio.
+///
+/// Unknown stays `None` rather than guessing. A caller that filters on this
+/// must treat `None` as allowed, or a tag Facebook renames tomorrow takes every
+/// rendition down with it.
+fn codec_for(tag: &str) -> Option<String> {
+    let t = tag.to_ascii_lowercase();
+    // Ordered: "av01" and "vp9" are distinctive, "h264"/"avc" is the fallback
+    // family, and the audio tags are checked last because a video tag never
+    // carries them.
+    for (needle, codec) in [
+        ("av01", "av1"),
+        ("av1", "av1"),
+        ("vp09", "vp9"),
+        ("vp9", "vp9"),
+        ("vp8", "vp8"),
+        ("hevc", "hevc"),
+        ("h265", "hevc"),
+        ("h264", "h264"),
+        ("avc", "h264"),
+        ("opus", "opus"),
+        ("aac", "aac"),
+    ] {
+        if t.contains(needle) {
+            return Some(codec.into());
+        }
+    }
+    None
+}
+
 fn label_for(bitrate: u64) -> String {
     match bitrate {
         0 => "video".into(),
@@ -237,4 +344,17 @@ fn unescape_html(s: &str) -> String {
         .replace("&#039;", "'")
         .replace("&#39;", "'")
         .replace("&amp;", "&")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn progressive_reads_escaped_urls() {
+        let page = r#"{"id":1,"browser_native_hd_url":"https:\/\/nowhere.invalid\/a.mp4?x=1","playable_url":"https:\/\/nowhere.invalid\/b.mp4"}"#;
+        let found = super::progressive(page, "");
+        assert_eq!(found.len(), 2, "both keys should be read: {found:?}");
+        assert_eq!(found[0].url, "https://nowhere.invalid/a.mp4?x=1");
+        assert_eq!(found[0].kind, "muxed");
+        assert_eq!(found[0].codec.as_deref(), Some("h264"));
+    }
 }
