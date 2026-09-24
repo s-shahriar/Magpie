@@ -35,6 +35,17 @@ object Cookies {
             "https://drive.google.com/",
             "google.com",
         ),
+
+        // The phone number + OTP form on this page is plain server-side Django,
+        // so it works inside a WebView. The Google and Facebook buttons beside
+        // it go through a Firebase popup, which an embedded WebView blocks.
+        LIVEMCQ(
+            "livemcq",
+            "LiveMCQ",
+            "https://livemcq.com/login/?next=/app/",
+            "https://livemcq.com/",
+            "livemcq.com",
+        ),
         ;
 
         companion object {
@@ -52,6 +63,7 @@ object Cookies {
         return when (site) {
             Site.FACEBOOK -> c.contains("c_user=")
             Site.GDRIVE -> c.contains("SID=") || c.contains("__Secure-1PSID=")
+            Site.LIVEMCQ -> c.contains("sessionid=")
         }
     }
 

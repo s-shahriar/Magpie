@@ -272,6 +272,20 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         DownloadEngine.cancel(job.id)
     }
 
+    fun rename(job: DownloadJob, title: String) {
+        if (title.isNotBlank()) DownloadEngine.rename(job.id, title.trim())
+    }
+
+    fun share(uri: Uri) {
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("video/mp4")
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val chooser = Intent.createChooser(send, "Share video")
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { getApplication<Application>().startActivity(chooser) }
+    }
+
     fun open(uri: Uri) {
         val intent = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, "video/mp4")

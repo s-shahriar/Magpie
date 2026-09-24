@@ -109,6 +109,24 @@ object DownloadEngine {
         pump()
     }
 
+    /**
+     * Renames a finished download, row and file together. The quality tag
+     * stays on the file name, as every download's does.
+     */
+    fun rename(id: String, title: String) = scope.launch {
+        val job = current(id) ?: return@launch
+        val fileName = safeFileName(title, job.quality)
+        job.outputUri?.let { uri ->
+            runCatching {
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName)
+                }
+                appContext.contentResolver.update(android.net.Uri.parse(uri), values, null, null)
+            }
+        }
+        patch(id) { it.copy(title = title, fileName = fileName) }
+    }
+
     /** Clears finished rows without touching the saved files. */
     fun clearFinished() {
         update { list -> list.filterNot { it.status == DownloadStatus.COMPLETED } }

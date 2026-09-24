@@ -42,12 +42,18 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadStatus
 import com.syed.magpie.data.formatBytes
+import com.syed.magpie.ui.LiveMcqViewModel
 import com.syed.magpie.ui.MagpieViewModel
 import com.syed.magpie.ui.Module
 import com.syed.magpie.ui.StillVideoViewModel
 import com.syed.magpie.data.StillJob
 import com.syed.magpie.data.StillStatus
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.offset
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,6 +61,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import com.syed.magpie.ui.component.DialogAction
 import com.syed.magpie.ui.component.MagpieDialog
+import com.syed.magpie.ui.component.RenameDialog
+import com.syed.magpie.ui.component.CardAction
+import com.syed.magpie.ui.component.CardBusy
+import com.syed.magpie.ui.component.CardButton
+import com.syed.magpie.ui.component.CardStatus
+import com.syed.magpie.ui.component.LibraryCard
+import com.syed.magpie.ui.component.Thumb
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.DriveFileRenameOutline
+import androidx.compose.material.icons.filled.Share
 
 /**
  * Each module keeps its own library; the switcher under the title picks
@@ -64,6 +81,7 @@ import com.syed.magpie.ui.component.MagpieDialog
 fun LibraryScreen(
     vm: MagpieViewModel,
     still: StillVideoViewModel,
+    livemcq: LiveMcqViewModel,
     onEditStill: (StillJob) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -74,6 +92,9 @@ fun LibraryScreen(
     val finished = when (module) {
         Module.Downloader -> jobs.count { it.status == DownloadStatus.COMPLETED }
         Module.StillVideo -> stills.count { it.status == StillStatus.COMPLETED }
+        // Nothing to sweep: these rows are the files themselves, and each
+        // one is deleted deliberately.
+        Module.LiveMcq -> 0
     }
 
     if (clearing) {
@@ -118,7 +139,6 @@ fun LibraryScreen(
         Spacer(Modifier.height(20.dp))
         ModuleSwitcher(
             current = module,
-            counts = mapOf(Module.Downloader to jobs.size, Module.StillVideo to stills.size),
             onSelect = { vm.libraryModule = it },
         )
         Spacer(Modifier.height(18.dp))
@@ -126,44 +146,70 @@ fun LibraryScreen(
         when (module) {
             Module.Downloader -> DownloadList(jobs, vm)
             Module.StillVideo -> StillLibrary(stills, still, onOpen = vm::open, onEdit = onEditStill)
+            Module.LiveMcq -> LiveMcqLibrary(livemcq)
         }
     }
 }
 
-/** A pill of module tabs, drawn like the floating nav bar. */
+/**
+ * The module picker, built the way the floating nav bar is: only the active
+ * module spells out its name, in a coral pill; the rest are icons carrying a
+ * count badge. Labels are what stop a row of tabs from scaling, so dropping
+ * all but one keeps a single calm line for six or seven modules. Past that
+ * the row scrolls rather than squeezing, and keeps the active one in view.
+ */
 @Composable
-private fun ModuleSwitcher(current: Module, counts: Map<Module, Int>, onSelect: (Module) -> Unit) {
+private fun ModuleSwitcher(current: Module, onSelect: (Module) -> Unit) {
+    val scroll = rememberScrollState()
     Surface(
         shape = RoundedCornerShape(50),
         color = MaterialTheme.colorScheme.surfaceVariant,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().height(56.dp),
     ) {
-        Row(Modifier.padding(5.dp)) {
+        Row(
+            Modifier.fillMaxSize().horizontalScroll(scroll).padding(horizontal = 6.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Module.entries.forEach { m ->
-                val active = m == current
-                Row(
-                    Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(50))
-                        .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
-                        .clickable { onSelect(m) }
-                        .padding(vertical = 10.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val tint = if (active) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                    Icon(m.icon, null, Modifier.size(18.dp), tint = tint)
-                    Spacer(Modifier.width(6.dp))
-                    Text(m.label, style = MaterialTheme.typography.labelLarge, color = tint, maxLines = 1)
-                    val n = counts[m] ?: 0
-                    if (n > 0) {
-                        Spacer(Modifier.width(4.dp))
-                        Text("$n", style = MaterialTheme.typography.labelMedium, color = tint.copy(alpha = 0.7f))
-                    }
-                }
+                ModuleTab(m, active = m == current) { onSelect(m) }
             }
+        }
+    }
+}
+
+@Composable
+private fun ModuleTab(module: Module, active: Boolean, onClick: () -> Unit) {
+    val pad by animateDpAsState(if (active) 16.dp else 12.dp, label = "tab")
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
+            .clickable(onClick = onClick)
+            .animateContentSize()
+            .padding(horizontal = pad, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (active) {
+            Icon(module.icon, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.onPrimary)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                module.label,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onPrimary,
+                maxLines = 1,
+                softWrap = false,
+            )
+        } else {
+            // An idle tab is just its icon, so the row stays as narrow as the
+            // icons themselves.
+            Icon(
+                module.icon,
+                module.label,
+                Modifier.padding(4.dp).size(21.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -171,6 +217,19 @@ private fun ModuleSwitcher(current: Module, counts: Map<Module, Int>, onSelect: 
 @Composable
 private fun DownloadList(jobs: List<DownloadJob>, vm: MagpieViewModel) {
     var confirming by remember { mutableStateOf<DownloadJob?>(null) }
+    var renaming by remember { mutableStateOf<DownloadJob?>(null) }
+
+    renaming?.let { job ->
+        RenameDialog(
+            title = "Rename video",
+            current = job.title,
+            onRename = {
+                vm.rename(job, it)
+                renaming = null
+            },
+            onDismiss = { renaming = null },
+        )
+    }
 
     confirming?.let { job ->
         MagpieDialog(
@@ -197,7 +256,7 @@ private fun DownloadList(jobs: List<DownloadJob>, vm: MagpieViewModel) {
             contentPadding = PaddingValues(bottom = 110.dp),
         ) {
             items(jobs, key = { it.id }) { job ->
-                JobCard(job, vm) { confirming = job }
+                JobCard(job, vm, onConfirmDelete = { confirming = job }, onRename = { renaming = job })
             }
         }
     }
@@ -216,102 +275,67 @@ internal fun EmptyLibrary(text: String) {
 }
 
 @Composable
-private fun JobCard(job: DownloadJob, vm: MagpieViewModel, onConfirmDelete: () -> Unit) {
-    Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(job.title, style = MaterialTheme.typography.titleMedium, maxLines = 2)
-                    Text(
-                        "${if (job.source == "facebook") "Facebook" else "Drive"} · ${job.quality}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+private fun JobCard(
+    job: DownloadJob,
+    vm: MagpieViewModel,
+    onConfirmDelete: () -> Unit,
+    onRename: () -> Unit,
+) {
+    val done = job.status == DownloadStatus.COMPLETED
+    // MERGING / SAVING cannot be interrupted safely.
+    val locked = job.status == DownloadStatus.MERGING || job.status == DownloadStatus.SAVING
+    LibraryCard(
+        title = job.title,
+        meta = listOfNotNull(
+            if (job.source == "facebook") "Facebook" else "Drive",
+            job.quality,
+            job.totalBytes?.takeIf { done }?.let(::formatBytes),
+        ).joinToString(" · "),
+        thumb = Thumb(
+            video = job.outputUri?.takeIf { done }?.toUri(),
+            icon = Icons.Default.Download,
+        ),
+        status = if (done) CardStatus.Saved
+        else CardStatus.Working(job.fraction, statusLine(job), failed = job.status == DownloadStatus.FAILED),
+        primary = {
+            when {
+                done -> CardButton(Icons.Default.PlayArrow, "Play") {
+                    job.outputUri?.let { vm.open(it.toUri()) }
                 }
-                Controls(job, vm, onConfirmDelete)
-            }
-
-            if (job.status != DownloadStatus.COMPLETED) {
-                Spacer(Modifier.height(12.dp))
-                LinearProgressIndicator(
-                    progress = { job.fraction },
-                    modifier = Modifier.fillMaxWidth().height(6.dp),
-                    color = if (job.status == DownloadStatus.FAILED) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
-                    trackColor = MaterialTheme.colorScheme.outlineVariant,
-                    strokeCap = StrokeCap.Round,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    statusLine(job),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (job.status == DownloadStatus.FAILED) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            } else {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Saved to Downloads/Magpie",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun Controls(job: DownloadJob, vm: MagpieViewModel, onConfirmDelete: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        when {
-            job.status == DownloadStatus.COMPLETED -> {
-                IconButton(onClick = { job.outputUri?.let { vm.open(it.toUri()) } }) {
-                    Icon(Icons.Default.PlayArrow, "Play", tint = MaterialTheme.colorScheme.primary)
+                job.status == DownloadStatus.DOWNLOADING ->
+                    CardButton(Icons.Default.Pause, "Pause", accent = false) { vm.pause(job.id) }
+                job.status.resumable -> {
+                    val failed = job.status == DownloadStatus.FAILED
+                    CardButton(
+                        if (failed) Icons.Default.Refresh else Icons.Default.PlayArrow,
+                        if (failed) "Retry" else "Resume",
+                    ) { vm.resume(job.id) }
                 }
+                else -> CardBusy()
             }
-            job.status == DownloadStatus.DOWNLOADING -> {
-                IconButton(onClick = { vm.pause(job.id) }) { Icon(Icons.Default.Pause, "Pause") }
+        },
+        menu = buildList {
+            if (done) {
+                add(CardAction("Share", Icons.Default.Share) { job.outputUri?.let { vm.share(it.toUri()) } })
+                add(CardAction("Rename", Icons.Default.DriveFileRenameOutline, onClick = onRename))
             }
-            job.status == DownloadStatus.QUEUED -> {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(4.dp))
+            if (!locked) {
+                add(
+                    CardAction(
+                        when {
+                            done -> "Delete"
+                            job.status.resumable -> "Remove"
+                            else -> "Cancel download"
+                        },
+                        if (done) Icons.Default.Delete else Icons.Default.Close,
+                        destructive = true,
+                        // A finished job owns a real file, so that one asks first.
+                        onClick = { if (done) onConfirmDelete() else vm.cancel(job.id) },
+                    ),
+                )
             }
-            job.status.resumable -> {
-                IconButton(onClick = { vm.resume(job.id) }) {
-                    Icon(
-                        if (job.status == DownloadStatus.FAILED) Icons.Default.Refresh
-                        else Icons.Default.PlayArrow,
-                        if (job.status == DownloadStatus.FAILED) "Retry" else "Resume",
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            }
-            // MERGING / SAVING cannot be interrupted safely.
-            else -> {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(4.dp))
-            }
-        }
-        if (job.status != DownloadStatus.MERGING && job.status != DownloadStatus.SAVING) {
-            IconButton(
-                onClick = {
-                    // A finished job owns a real file, so that one asks first.
-                    if (job.status == DownloadStatus.COMPLETED) onConfirmDelete()
-                    else vm.cancel(job.id)
-                },
-            ) { Icon(Icons.Default.Close, "Remove") }
-        }
-    }
+        },
+    )
 }
 
 private fun statusLine(job: DownloadJob): String {
