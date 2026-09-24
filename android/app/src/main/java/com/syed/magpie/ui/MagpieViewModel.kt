@@ -69,6 +69,27 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
 
     fun showLibrary() { libraryRequest++ }
 
+    /** The module open in the first tab; null is the hub. */
+    var module by mutableStateOf<Module?>(null)
+
+    /** Like [libraryRequest], for an intent that lands inside a module. */
+    var moduleRequest by mutableStateOf(0)
+        private set
+
+    /** Which module's library the Library tab shows. */
+    var libraryModule by mutableStateOf(Module.Downloader)
+
+    /** Opens a module; its library becomes the one the Library tab shows. */
+    fun enterModule(m: Module) {
+        module = m
+        libraryModule = m
+    }
+
+    fun openModule(m: Module) {
+        enterModule(m)
+        moduleRequest++
+    }
+
     private val updates = UpdateService(app)
 
     init {

@@ -1,5 +1,6 @@
 package com.syed.magpie.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -7,7 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.*
@@ -23,22 +24,28 @@ import com.syed.magpie.ui.component.QualitySheet
 import com.syed.magpie.ui.screen.HomeScreen
 import com.syed.magpie.ui.screen.LibraryScreen
 import com.syed.magpie.ui.screen.LoginScreen
+import com.syed.magpie.ui.screen.ModulesScreen
+import com.syed.magpie.ui.screen.StillVideoScreen
 import com.syed.magpie.ui.screen.SettingsScreen
 
 private enum class Tab(val label: String, val icon: ImageVector) {
-    Fetch("Fetch", Icons.Default.Download),
+    Modules("Modules", Icons.Default.GridView),
     Library("Library", Icons.Default.VideoLibrary),
     Settings("Settings", Icons.Default.Settings),
 }
 
 @Composable
-fun MagpieApp(vm: MagpieViewModel) {
-    var tab by remember { mutableStateOf(Tab.Fetch) }
+fun MagpieApp(vm: MagpieViewModel, still: StillVideoViewModel) {
+    var tab by remember { mutableStateOf(Tab.Modules) }
     var login by remember { mutableStateOf<Cookies.Site?>(null) }
 
     // A notification tap asks for the queue, whatever tab was last open.
     LaunchedEffect(vm.libraryRequest) {
         if (vm.libraryRequest > 0) tab = Tab.Library
+    }
+    // A shared link or photo opens its module.
+    LaunchedEffect(vm.moduleRequest) {
+        if (vm.moduleRequest > 0) tab = Tab.Modules
     }
 
     val capturing = (vm.probe as? ProbeState.NeedsCapture)?.url
@@ -67,18 +74,46 @@ fun MagpieApp(vm: MagpieViewModel) {
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when (tab) {
-            Tab.Fetch -> HomeScreen(
+            Tab.Modules -> {
+                val toHub = { vm.module = null }
+                if (vm.module != null) BackHandler(onBack = toHub)
+                when (vm.module) {
+                    null -> ModulesScreen(onOpen = vm::enterModule)
+                    Module.Downloader -> HomeScreen(
+                        vm,
+                        onSignIn = { login = it },
+                        onCapture = { captureOpen = true },
+                        onBack = toHub,
+                    )
+                    Module.StillVideo -> StillVideoScreen(
+                        still,
+                        onBack = toHub,
+                        onOpen = vm::open,
+                        onLibrary = {
+                            vm.libraryModule = Module.StillVideo
+                            tab = Tab.Library
+                        },
+                    )
+                }
+            }
+            Tab.Library -> LibraryScreen(
                 vm,
-                onSignIn = { login = it },
-                onCapture = { captureOpen = true },
+                still,
+                onEditStill = {
+                    still.edit(it)
+                    vm.openModule(Module.StillVideo)
+                },
             )
-            Tab.Library -> LibraryScreen(vm)
             Tab.Settings -> SettingsScreen(vm, onSignIn = { login = it })
         }
 
         NavBar(
             current = tab,
-            onSelect = { tab = it },
+            onSelect = {
+                // Tapping Modules again from inside a module goes back to the hub.
+                if (it == Tab.Modules && tab == Tab.Modules) vm.module = null
+                tab = it
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(horizontal = 26.dp)

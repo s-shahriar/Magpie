@@ -43,43 +43,50 @@ import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadStatus
 import com.syed.magpie.data.formatBytes
 import com.syed.magpie.ui.MagpieViewModel
+import com.syed.magpie.ui.Module
+import com.syed.magpie.ui.StillVideoViewModel
+import com.syed.magpie.data.StillJob
+import com.syed.magpie.data.StillStatus
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import com.syed.magpie.ui.component.DialogAction
 import com.syed.magpie.ui.component.MagpieDialog
 
+/**
+ * Each module keeps its own library; the switcher under the title picks
+ * which one is showing, and remembers it in the ViewModel across tabs.
+ */
 @Composable
-fun LibraryScreen(vm: MagpieViewModel, modifier: Modifier = Modifier) {
+fun LibraryScreen(
+    vm: MagpieViewModel,
+    still: StillVideoViewModel,
+    onEditStill: (StillJob) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val jobs by vm.jobs.collectAsStateWithLifecycle()
-    var confirming by remember { mutableStateOf<DownloadJob?>(null) }
+    val stills by still.jobs.collectAsStateWithLifecycle()
     var clearing by remember { mutableStateOf(false) }
-    val finished = jobs.count { it.status == DownloadStatus.COMPLETED }
+    val module = vm.libraryModule
+    val finished = when (module) {
+        Module.Downloader -> jobs.count { it.status == DownloadStatus.COMPLETED }
+        Module.StillVideo -> stills.count { it.status == StillStatus.COMPLETED }
+    }
 
     if (clearing) {
         MagpieDialog(
-            title = "Clear finished downloads?",
+            title = if (module == Module.Downloader) "Clear finished downloads?" else "Clear finished videos?",
             message = "${if (finished == 1) "One saved video" else "$finished saved videos"} " +
-                "will leave this list. The files stay in Downloads/Magpie.",
+                "will leave this list. The files stay in Downloads/Magpie." +
+                if (module == Module.StillVideo) " They can no longer be edited." else "",
             primary = DialogAction("Clear list") {
-                vm.clearFinished()
+                if (module == Module.Downloader) vm.clearFinished() else still.clearFinished()
                 clearing = false
             },
             onDismiss = { clearing = false },
-        )
-    }
-
-    confirming?.let { job ->
-        MagpieDialog(
-            title = "Delete this video?",
-            subject = job.title,
-            message = "It will be removed from Downloads/Magpie. This cannot be undone.",
-            primary = DialogAction("Delete video", destructive = true) {
-                vm.deleteWithFile(job)
-                confirming = null
-            },
-            secondary = DialogAction("Remove from list only") {
-                vm.cancel(job.id)
-                confirming = null
-            },
-            onDismiss = { confirming = null },
         )
     }
 
@@ -102,33 +109,109 @@ fun LibraryScreen(vm: MagpieViewModel, modifier: Modifier = Modifier) {
                 ) {
                     Icon(
                         Icons.Default.PlaylistRemove,
-                        "Clear finished downloads",
+                        "Clear finished",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
         }
-        Spacer(Modifier.height(26.dp))
+        Spacer(Modifier.height(20.dp))
+        ModuleSwitcher(
+            current = module,
+            counts = mapOf(Module.Downloader to jobs.size, Module.StillVideo to stills.size),
+            onSelect = { vm.libraryModule = it },
+        )
+        Spacer(Modifier.height(18.dp))
 
-        if (jobs.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    "Nothing here yet.\nPaste a link on the Fetch tab.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
-            }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 110.dp),
-            ) {
-                items(jobs, key = { it.id }) { job ->
-                    JobCard(job, vm) { confirming = job }
+        when (module) {
+            Module.Downloader -> DownloadList(jobs, vm)
+            Module.StillVideo -> StillLibrary(stills, still, onOpen = vm::open, onEdit = onEditStill)
+        }
+    }
+}
+
+/** A pill of module tabs, drawn like the floating nav bar. */
+@Composable
+private fun ModuleSwitcher(current: Module, counts: Map<Module, Int>, onSelect: (Module) -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(Modifier.padding(5.dp)) {
+            Module.entries.forEach { m ->
+                val active = m == current
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(50))
+                        .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
+                        .clickable { onSelect(m) }
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val tint = if (active) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                    Icon(m.icon, null, Modifier.size(18.dp), tint = tint)
+                    Spacer(Modifier.width(6.dp))
+                    Text(m.label, style = MaterialTheme.typography.labelLarge, color = tint, maxLines = 1)
+                    val n = counts[m] ?: 0
+                    if (n > 0) {
+                        Spacer(Modifier.width(4.dp))
+                        Text("$n", style = MaterialTheme.typography.labelMedium, color = tint.copy(alpha = 0.7f))
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DownloadList(jobs: List<DownloadJob>, vm: MagpieViewModel) {
+    var confirming by remember { mutableStateOf<DownloadJob?>(null) }
+
+    confirming?.let { job ->
+        MagpieDialog(
+            title = "Delete this video?",
+            subject = job.title,
+            message = "It will be removed from Downloads/Magpie. This cannot be undone.",
+            primary = DialogAction("Delete video", destructive = true) {
+                vm.deleteWithFile(job)
+                confirming = null
+            },
+            secondary = DialogAction("Remove from list only") {
+                vm.cancel(job.id)
+                confirming = null
+            },
+            onDismiss = { confirming = null },
+        )
+    }
+
+    if (jobs.isEmpty()) {
+        EmptyLibrary("Nothing here yet.\nOpen Downloader from Modules and paste a link.")
+    } else {
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 110.dp),
+        ) {
+            items(jobs, key = { it.id }) { job ->
+                JobCard(job, vm) { confirming = job }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun EmptyLibrary(text: String) {
+    Box(Modifier.fillMaxSize().padding(bottom = 110.dp), contentAlignment = Alignment.Center) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

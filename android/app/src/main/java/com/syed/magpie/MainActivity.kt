@@ -3,6 +3,7 @@ package com.syed.magpie
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -14,12 +15,16 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import com.syed.magpie.ui.MagpieApp
 import com.syed.magpie.ui.MagpieViewModel
+import com.syed.magpie.ui.Module
+import com.syed.magpie.ui.StillVideoViewModel
 import com.syed.magpie.ui.theme.MagpieTheme
 
 class MainActivity : ComponentActivity() {
     private val vm: MagpieViewModel by viewModels()
+    private val still: StillVideoViewModel by viewModels()
 
     /**
      * Android 13 stopped granting POST_NOTIFICATIONS with the manifest alone.
@@ -39,6 +44,7 @@ class MainActivity : ComponentActivity() {
                 Surface(Modifier.fillMaxSize()) {
                     MagpieApp(
                         vm = vm,
+                        still = still,
                     )
                 }
             }
@@ -76,13 +82,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Sharing a link from Facebook or Drive drops it straight into the box. */
+    /**
+     * Sharing a link from Facebook or Drive drops it straight into the box;
+     * sharing a photo opens it in Still → Video.
+     */
     private fun handleShare(intent: Intent) {
+        if (intent.type?.startsWith("image/") == true) {
+            val photo = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
+            if (photo != null) {
+                still.pick(photo)
+                vm.openModule(Module.StillVideo)
+            }
+            return
+        }
         val shared = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
         // Apps often share "caption https://…"; keep the URL.
         val url = shared.split(Regex("\\s+")).lastOrNull { it.startsWith("http") }
         if (!url.isNullOrEmpty()) {
             vm.link = url
+            vm.openModule(Module.Downloader)
             vm.fetch()
         }
     }

@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.syed.magpie.data.Cookies
 import com.syed.magpie.ui.MagpieViewModel
+import com.syed.magpie.ui.Module
 import com.syed.magpie.ui.ProbeState
 
 @Composable
@@ -28,6 +29,7 @@ fun HomeScreen(
     vm: MagpieViewModel,
     onSignIn: (Cookies.Site) -> Unit,
     onCapture: () -> Unit = {},
+    onBack: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -38,15 +40,10 @@ fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 22.dp),
     ) {
-        Spacer(Modifier.height(30.dp))
-        Text(
-            "Magpie",
-            style = MaterialTheme.typography.displaySmall,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
         Spacer(Modifier.height(26.dp))
+        ModuleHeader(Module.Downloader, onBack)
+
+        Spacer(Modifier.height(18.dp))
 
         OutlinedTextField(
             value = vm.link,
