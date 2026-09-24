@@ -32,8 +32,7 @@ import com.syed.magpie.data.StillVideo
 import com.syed.magpie.ui.Module
 import com.syed.magpie.data.StillStatus
 import com.syed.magpie.ui.component.StoryCanvas
-import com.syed.magpie.ui.component.TextEntry
-import com.syed.magpie.ui.component.TextStyleBar
+import com.syed.magpie.ui.component.StoryEditorScreen
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.StrokeCap
@@ -206,12 +205,24 @@ private fun StoryEditorSection(vm: StillVideoViewModel, source: android.net.Uri,
         value = vm.preview(source, vm.frame)?.asImageBitmap()
     }
 
-    vm.typing?.let { layer ->
-        TextEntry(layer, onDone = vm::finishTyping, onCancel = { vm.finishTyping(null) })
+    val image = base
+    if (vm.editorOpen && image != null) {
+        StoryEditorScreen(
+            base = image,
+            layers = vm.texts,
+            selected = vm.selected,
+            typeRequest = vm.typeRequest,
+            onSelect = vm::selectText,
+            onChange = vm::updateText,
+            onAdd = vm::addText,
+            onDuplicate = vm::duplicateText,
+            onDelete = vm::deleteText,
+            onClose = vm::closeEditor,
+        )
     }
 
+    // The form shows the story as it stands; editing happens full screen.
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        val image = base
         if (image == null) {
             Box(
                 Modifier
@@ -225,17 +236,38 @@ private fun StoryEditorSection(vm: StillVideoViewModel, source: android.net.Uri,
             // Fit the frame inside the column's width and a fixed height, so
             // a 9:16 story stays on screen with its controls below it.
             val aspect = image.width.toFloat() / image.height
-            val maxH = 460.dp
-            val w = minOf(maxWidth, maxH * aspect)
-            StoryCanvas(
-                base = image,
-                layers = vm.texts,
-                selected = vm.selected,
-                onSelect = vm::selectText,
-                onChange = vm::updateText,
-                onEdit = vm::editText,
-                modifier = Modifier.size(w, w / aspect),
-            )
+            val w = minOf(maxWidth, 460.dp * aspect)
+            Box(Modifier.size(w, w / aspect)) {
+                StoryCanvas(
+                    base = image,
+                    layers = vm.texts,
+                    selected = null,
+                    onSelect = {},
+                    onChange = {},
+                    onEdit = {},
+                    modifier = Modifier.matchParentSize(),
+                )
+                // Any tap opens the editor; the canvas here is only a view.
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .clip(MaterialTheme.shapes.medium)
+                        .clickable { if (vm.texts.isEmpty()) vm.addText() else vm.openEditor() },
+                )
+                if (vm.texts.isNotEmpty()) {
+                    Text(
+                        "Tap to edit",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(12.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.8f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+            }
         }
     }
 
@@ -248,6 +280,7 @@ private fun StoryEditorSection(vm: StillVideoViewModel, source: android.net.Uri,
         }
         Button(
             onClick = vm::addText,
+            enabled = image != null,
             shape = MaterialTheme.shapes.small,
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
@@ -258,24 +291,6 @@ private fun StoryEditorSection(vm: StillVideoViewModel, source: android.net.Uri,
             Spacer(Modifier.width(8.dp))
             Text("Add text")
         }
-    }
-
-    val layer = vm.texts.firstOrNull { it.id == vm.selected }
-    Spacer(Modifier.height(14.dp))
-    if (layer != null) {
-        TextStyleBar(
-            layer = layer,
-            onChange = vm::updateText,
-            onEdit = { vm.editText(layer.id) },
-            onDuplicate = { vm.duplicateText(layer.id) },
-            onDelete = { vm.deleteText(layer.id) },
-        )
-    } else if (vm.texts.isNotEmpty()) {
-        Text(
-            "Tap text to style it · drag to move · pinch to resize and rotate · double-tap to edit",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 

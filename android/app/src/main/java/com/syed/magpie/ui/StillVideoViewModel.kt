@@ -46,8 +46,12 @@ class StillVideoViewModel(app: Application) : AndroidViewModel(app) {
     /** The layer the style controls act on. */
     var selected by mutableStateOf<String?>(null)
 
-    /** The layer open in the full-screen text entry, new or existing. */
-    var typing by mutableStateOf<TextLayer?>(null)
+    /** Whether the full-screen story editor is open. */
+    var editorOpen by mutableStateOf(false)
+        private set
+
+    /** Bumped to ask the editor for the keyboard on the selected layer. */
+    var typeRequest by mutableIntStateOf(0)
         private set
 
     private val previewer = StillVideo(app)
@@ -122,33 +126,37 @@ class StillVideoViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- text layers ---------------------------------------------------
 
-    /** Opens the text entry for a new layer, styled like the last one. */
+    /**
+     * Adds a layer, styled like the last one, and opens the editor on it with
+     * the keyboard up. It exists from the start, so the canvas draws it as
+     * it is typed; one still empty when the editor closes is dropped.
+     */
     fun addText() {
         val last = texts.lastOrNull()
-        typing = TextLayer(
+        val layer = TextLayer(
             text = "",
             font = last?.font ?: StoryFont.Classic,
             color = last?.color ?: android.graphics.Color.WHITE,
             look = last?.look ?: TextLook.Plain,
             align = last?.align ?: StoryAlign.Center,
         )
+        texts.add(layer)
+        selected = layer.id
+        editorOpen = true
+        typeRequest++
     }
 
-    fun editText(id: String) {
-        typing = texts.firstOrNull { it.id == id }
+    /** Opens the editor, on [id] when given; [type] also raises the keyboard. */
+    fun openEditor(id: String? = selected, type: Boolean = false) {
+        if (id != null) selectText(id)
+        editorOpen = true
+        if (type && id != null) typeRequest++
     }
 
-    /** Commits the text entry; an emptied layer is removed. */
-    fun finishTyping(layer: TextLayer?) {
-        typing = null
-        if (layer == null) return
-        val i = texts.indexOfFirst { it.id == layer.id }
-        when {
-            layer.text.isBlank() -> if (i >= 0) texts.removeAt(i)
-            i >= 0 -> texts[i] = layer
-            else -> texts.add(layer)
-        }
-        selected = layer.id.takeIf { layer.text.isNotBlank() }
+    fun closeEditor() {
+        texts.removeAll { it.text.isBlank() }
+        if (texts.none { it.id == selected }) selected = null
+        editorOpen = false
     }
 
     fun updateText(layer: TextLayer) {

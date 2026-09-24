@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -54,6 +55,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.FormatColorFill
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import android.view.WindowManager
 import androidx.compose.ui.window.DialogProperties
 import com.syed.magpie.data.StoryAlign
 import com.syed.magpie.data.StoryFont
@@ -238,58 +249,6 @@ private fun contains(
 
 // ---- style controls ----------------------------------------------------
 
-/** Everything that styles the selected layer, under the preview. */
-@Composable
-fun TextStyleBar(
-    layer: TextLayer,
-    onChange: (TextLayer) -> Unit,
-    onEdit: () -> Unit,
-    onDuplicate: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            ToolButton(Icons.Default.Edit, "Edit text", onEdit)
-            ToolButton(alignIcon(layer.align), "Alignment", onClick = { onChange(layer.copy(align = layer.align.next())) })
-            ToolButton(Icons.Default.ContentCopy, "Duplicate", onDuplicate)
-            Spacer(Modifier.weight(1f))
-            ToolButton(Icons.Default.Delete, "Delete text", onClick = onDelete, tint = MaterialTheme.colorScheme.error)
-        }
-        FontRow(layer.font) { onChange(layer.copy(font = it)) }
-        ColorRow(layer.color) { onChange(layer.copy(color = it)) }
-        LookRow(layer.look) { onChange(layer.copy(look = it)) }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("A", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Slider(
-                value = layer.size,
-                onValueChange = { onChange(layer.copy(size = it)) },
-                valueRange = TextLayer.MIN_SIZE..TextLayer.MAX_SIZE,
-                modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
-                colors = SliderDefaults.colors(inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant),
-            )
-            Text("A", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
-private fun ToolButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    tint: Color = MaterialTheme.colorScheme.onSurface,
-) {
-    Surface(
-        onClick = onClick,
-        shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.padding(end = 8.dp).size(42.dp),
-    ) {
-        Box(contentAlignment = Alignment.Center) { Icon(icon, label, Modifier.size(20.dp), tint = tint) }
-    }
-}
-
 private fun alignIcon(a: StoryAlign) = when (a) {
     StoryAlign.Left -> Icons.AutoMirrored.Filled.FormatAlignLeft
     StoryAlign.Center -> Icons.Default.FormatAlignCenter
@@ -392,98 +351,254 @@ fun LookRow(current: TextLook, dark: Boolean = false, onPick: (TextLook) -> Unit
     }
 }
 
-// ---- text entry --------------------------------------------------------
+// ---- the editor ------------------------------------------------------
+
+private val EditorBg = Color(0xFF121110)
+private val PanelBg = Color(0xFF1E1B18)
 
 /**
- * Full-screen typing over a dimmed backdrop, in the layer's own font and
- * colour, with font, look and colour pickers riding above the keyboard.
- * Done with nothing typed removes the layer.
+ * The full-screen story editor. Three bands, none drawn over another: the
+ * bar on top, the story fitted into whatever height is left, and the style
+ * panel on the bottom riding above the keyboard. The canvas is the same one
+ * the form shows — drag, pinch, twist and tap all work here — and it draws
+ * with the encoder's painter, so what is typed is what gets rendered.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TextEntry(layer: TextLayer, onDone: (TextLayer) -> Unit, onCancel: () -> Unit) {
-    var draft by remember { mutableStateOf(layer) }
-    var value by remember {
-        mutableStateOf(TextFieldValue(layer.text, TextRange(layer.text.length)))
-    }
+fun StoryEditorScreen(
+    base: ImageBitmap,
+    layers: List<TextLayer>,
+    selected: String?,
+    typeRequest: Int,
+    onSelect: (String?) -> Unit,
+    onChange: (TextLayer) -> Unit,
+    onAdd: () -> Unit,
+    onDuplicate: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onClose: () -> Unit,
+) {
     val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    var editBump by remember { mutableIntStateOf(0) }
+    var styleTab by remember { mutableStateOf(StyleTab.Font) }
+    val layer = layers.firstOrNull { it.id == selected }
+    val typing = WindowInsets.isImeVisible
 
     Dialog(
-        onDismissRequest = onCancel,
+        onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
+        // A dialog is its own window, and focusing a field inside it does not
+        // raise the keyboard on its own; it is asked for explicitly below.
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect { window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE) }
+        // Read here, inside the dialog: taken outside, they belong to the
+        // activity's window and cannot reach the field in this one.
+        val keyboard = LocalSoftwareKeyboardController.current
+        val focusManager = LocalFocusManager.current
+
+        // Keyboard on request: a new layer, or a double-tap on an old one.
+        LaunchedEffect(typeRequest, editBump) {
+            if (typeRequest == 0 && editBump == 0) return@LaunchedEffect
+            kotlinx.coroutines.delay(60)
+            runCatching { focus.requestFocus() }
+            keyboard?.show()
+        }
+
         Column(
             Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.78f))
+                .background(EditorBg)
                 .systemBarsPadding()
-                .imePadding()
-                .padding(horizontal = 18.dp, vertical = 12.dp),
+                .imePadding(),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onCancel) { Text("Cancel", color = Color.White) }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = { draft = draft.copy(align = draft.align.next()) }) {
-                    Icon(alignIcon(draft.align), "Alignment", tint = Color.White)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onAdd) {
+                    Icon(Icons.Default.TextFields, null, Modifier.size(20.dp), tint = Color.White)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Add text", color = Color.White, style = MaterialTheme.typography.labelLarge)
                 }
                 Spacer(Modifier.weight(1f))
-                Button(
-                    onClick = { onDone(draft.copy(text = value.text.trimEnd())) },
-                    shape = MaterialTheme.shapes.small,
-                ) { Text("Done") }
+                Button(onClick = onClose, shape = MaterialTheme.shapes.small) { Text("Done") }
             }
 
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                BasicTextField(
-                    value = value,
-                    onValueChange = { value = it },
-                    textStyle = TextStyle(
-                        fontFamily = draft.font.family(),
-                        fontSize = 34.sp,
-                        color = entryColor(draft),
-                        textAlign = when (draft.align) {
-                            StoryAlign.Left -> TextAlign.Start
-                            StoryAlign.Center -> TextAlign.Center
-                            StoryAlign.Right -> TextAlign.End
-                        },
-                        background = entryBackground(draft),
-                    ),
-                    cursorBrush = SolidColor(Color(draft.color)),
-                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
-                    decorationBox = { inner ->
-                        Box(contentAlignment = Alignment.Center) {
-                            if (value.text.isEmpty()) {
-                                Text(
-                                    "Type something",
-                                    fontFamily = draft.font.family(),
-                                    fontSize = 34.sp,
-                                    color = Color.White.copy(alpha = 0.4f),
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                            inner()
+            // The story takes whatever height the bars leave, fitted whole.
+            BoxWithConstraints(
+                Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                val aspect = base.width.toFloat() / base.height
+                val w = minOf(maxWidth, maxHeight * aspect)
+                StoryCanvas(
+                    base = base,
+                    layers = layers,
+                    selected = selected,
+                    onSelect = {
+                        // While typing, a tap on empty story only lowers the
+                        // keyboard to show the whole frame; the layer stays.
+                        if (it == null && typing) {
+                            focusManager.clearFocus()
+                            keyboard?.hide()
+                        } else {
+                            onSelect(it)
                         }
                     },
+                    onChange = onChange,
+                    onEdit = {
+                        onSelect(it)
+                        editBump++
+                    },
+                    modifier = Modifier.size(w, w / aspect),
                 )
             }
 
-            FontRow(draft.font, dark = true) { draft = draft.copy(font = it) }
-            Spacer(Modifier.height(10.dp))
-            LookRow(draft.look, dark = true) { draft = draft.copy(look = it) }
-            Spacer(Modifier.height(10.dp))
-            ColorRow(draft.color) { draft = draft.copy(color = it) }
-            Spacer(Modifier.height(6.dp))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                    .background(PanelBg)
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (layer == null) {
+                    Text(
+                        if (layers.isEmpty()) "Add text to start." else
+                            "Tap a text to style it · drag to move · pinch to resize and rotate · double-tap to type",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextInput(layer, focus, Modifier.weight(1f)) { onChange(layer.copy(text = it)) }
+                        Spacer(Modifier.width(6.dp))
+                        DarkTool(alignIcon(layer.align), "Alignment") {
+                            onChange(layer.copy(align = layer.align.next()))
+                        }
+                        DarkTool(Icons.Default.ContentCopy, "Duplicate") { onDuplicate(layer.id) }
+                        DarkTool(Icons.Default.Delete, "Delete text", tint = Color(0xFFFF8A7A)) {
+                            onDelete(layer.id)
+                        }
+                    }
+                    val font = @Composable { FontRow(layer.font, dark = true) { onChange(layer.copy(font = it)) } }
+                    val look = @Composable { LookRow(layer.look, dark = true) { onChange(layer.copy(look = it)) } }
+                    val color = @Composable { ColorRow(layer.color) { onChange(layer.copy(color = it)) } }
+                    if (typing) {
+                        // The keyboard leaves room for one row: three tabs
+                        // share it, so the story keeps most of the height.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            StyleTabs(styleTab) { styleTab = it }
+                            Spacer(Modifier.width(10.dp))
+                            Box(Modifier.weight(1f)) {
+                                when (styleTab) {
+                                    StyleTab.Font -> font()
+                                    StyleTab.Look -> look()
+                                    StyleTab.Color -> color()
+                                }
+                            }
+                        }
+                    } else {
+                        font()
+                        look()
+                        color()
+                    }
+                    // Pinching covers size while typing; with the keyboard
+                    // down there is room for the slider as well.
+                    if (!typing) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("A", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.7f))
+                            Slider(
+                                value = layer.size,
+                                onValueChange = { onChange(layer.copy(size = it)) },
+                                valueRange = TextLayer.MIN_SIZE..TextLayer.MAX_SIZE,
+                                modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+                                colors = SliderDefaults.colors(inactiveTrackColor = Color.White.copy(alpha = 0.2f)),
+                            )
+                            Text("A", style = MaterialTheme.typography.titleLarge, color = Color.White.copy(alpha = 0.7f))
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-/** An approximation of the look while typing; the canvas shows the real one. */
-private fun entryColor(l: TextLayer): Color =
-    if (l.look == TextLook.Solid) Color(StoryTextPainter.contrast(l.color)) else Color(l.color)
+/** The selected layer's words, typed in its own font. */
+@Composable
+private fun TextInput(layer: TextLayer, focus: FocusRequester, modifier: Modifier, onText: (String) -> Unit) {
+    // Keyed on the layer, so switching layers starts from that one's text
+    // with the cursor at its end.
+    var value by remember(layer.id) {
+        mutableStateOf(TextFieldValue(layer.text, TextRange(layer.text.length)))
+    }
+    BasicTextField(
+        value = value,
+        onValueChange = {
+            value = it
+            onText(it.text)
+        },
+        textStyle = TextStyle(fontFamily = layer.font.family(), fontSize = 18.sp, color = Color.White),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        maxLines = 3,
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color.White.copy(alpha = 0.1f))
+            .padding(horizontal = 16.dp, vertical = 11.dp)
+            .focusRequester(focus),
+        decorationBox = { inner ->
+            Box {
+                if (value.text.isEmpty()) {
+                    Text("Type something", fontFamily = layer.font.family(), fontSize = 18.sp, color = Color.White.copy(alpha = 0.4f))
+                }
+                inner()
+            }
+        },
+    )
+}
 
-private fun entryBackground(l: TextLayer): Color = when (l.look) {
-    TextLook.Solid -> Color(l.color)
-    TextLook.Soft -> Color.Black.copy(alpha = 0.55f)
-    else -> Color.Transparent
+private enum class StyleTab(val icon: ImageVector, val label: String) {
+    Font(Icons.Default.TextFields, "Font"),
+    Look(Icons.Default.FormatColorFill, "Look"),
+    Color(Icons.Default.Palette, "Colour"),
+}
+
+@Composable
+private fun StyleTabs(current: StyleTab, onPick: (StyleTab) -> Unit) {
+    Row(
+        Modifier.clip(RoundedCornerShape(50)).background(androidx.compose.ui.graphics.Color.White.copy(alpha = 0.1f)).padding(3.dp),
+    ) {
+        StyleTab.entries.forEach { t ->
+            val on = t == current
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(if (on) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent)
+                    .clickable { onPick(t) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    t.icon,
+                    t.label,
+                    Modifier.size(17.dp),
+                    tint = if (on) MaterialTheme.colorScheme.onPrimary else androidx.compose.ui.graphics.Color.White,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DarkTool(icon: ImageVector, label: String, tint: Color = Color.White, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .padding(start = 6.dp)
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.1f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, label, Modifier.size(19.dp), tint = tint) }
 }
