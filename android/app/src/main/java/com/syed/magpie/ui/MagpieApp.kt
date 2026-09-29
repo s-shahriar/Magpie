@@ -27,6 +27,7 @@ import com.syed.magpie.ui.screen.LiveMcqScreen
 import com.syed.magpie.ui.screen.LoginScreen
 import com.syed.magpie.ui.screen.ModulesScreen
 import com.syed.magpie.ui.screen.StillVideoScreen
+import com.syed.magpie.ui.screen.SubtitleScreen
 import com.syed.magpie.ui.screen.SettingsScreen
 
 private enum class Tab(val label: String, val icon: ImageVector) {
@@ -36,7 +37,12 @@ private enum class Tab(val label: String, val icon: ImageVector) {
 }
 
 @Composable
-fun MagpieApp(vm: MagpieViewModel, still: StillVideoViewModel, livemcq: LiveMcqViewModel) {
+fun MagpieApp(
+    vm: MagpieViewModel,
+    still: StillVideoViewModel,
+    livemcq: LiveMcqViewModel,
+    subtitles: SubtitleViewModel,
+) {
     var tab by remember { mutableStateOf(Tab.Modules) }
     var login by remember { mutableStateOf<Cookies.Site?>(null) }
 
@@ -102,18 +108,28 @@ fun MagpieApp(vm: MagpieViewModel, still: StillVideoViewModel, livemcq: LiveMcqV
                             tab = Tab.Library
                         },
                     )
+                    Module.Subtitles -> SubtitleScreen(
+                        subtitles,
+                        onBack = toHub,
+                        onSettings = { tab = Tab.Settings },
+                        onLibrary = {
+                            vm.libraryModule = Module.Subtitles
+                            tab = Tab.Library
+                        },
+                    )
                 }
             }
             Tab.Library -> LibraryScreen(
                 vm,
                 still,
                 livemcq,
+                subtitles,
                 onEditStill = {
                     still.edit(it)
                     vm.openModule(Module.StillVideo)
                 },
             )
-            Tab.Settings -> SettingsScreen(vm, onSignIn = { login = it })
+            Tab.Settings -> SettingsScreen(vm, subtitles, onSignIn = { login = it })
         }
 
         NavBar(

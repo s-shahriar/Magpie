@@ -14,6 +14,7 @@ jna = "5.15.0"
 webkit = "1.17.0"
 media3 = "1.5.1"
 junit = "4.13.2"
+json = "20250517"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -40,6 +41,8 @@ androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "w
 androidx-media3-muxer = { group = "androidx.media3", name = "media3-muxer", version.ref = "media3" }
 androidx-media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+# Real org.json for JVM unit tests; the Android stub throws on every call.
+org-json = { group = "org.json", name = "json", version.ref = "json" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

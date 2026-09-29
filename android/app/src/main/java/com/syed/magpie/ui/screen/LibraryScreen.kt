@@ -46,6 +46,8 @@ import com.syed.magpie.ui.LiveMcqViewModel
 import com.syed.magpie.ui.MagpieViewModel
 import com.syed.magpie.ui.Module
 import com.syed.magpie.ui.StillVideoViewModel
+import com.syed.magpie.ui.SubtitleViewModel
+import com.syed.magpie.data.SubtitleStatus
 import com.syed.magpie.data.StillJob
 import com.syed.magpie.data.StillStatus
 import androidx.compose.foundation.BorderStroke
@@ -82,11 +84,13 @@ fun LibraryScreen(
     vm: MagpieViewModel,
     still: StillVideoViewModel,
     livemcq: LiveMcqViewModel,
+    subtitles: SubtitleViewModel,
     onEditStill: (StillJob) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val jobs by vm.jobs.collectAsStateWithLifecycle()
     val stills by still.jobs.collectAsStateWithLifecycle()
+    val subs by subtitles.jobs.collectAsStateWithLifecycle()
     var clearing by remember { mutableStateOf(false) }
     val module = vm.libraryModule
     val finished = when (module) {
@@ -95,16 +99,26 @@ fun LibraryScreen(
         // Nothing to sweep: these rows are the files themselves, and each
         // one is deleted deliberately.
         Module.LiveMcq -> 0
+        Module.Subtitles -> subs.count { it.status == SubtitleStatus.COMPLETED }
     }
 
     if (clearing) {
+        val noun = if (module == Module.Subtitles) "subtitle file" else "video"
         MagpieDialog(
-            title = if (module == Module.Downloader) "Clear finished downloads?" else "Clear finished videos?",
-            message = "${if (finished == 1) "One saved video" else "$finished saved videos"} " +
+            title = when (module) {
+                Module.Downloader -> "Clear finished downloads?"
+                Module.Subtitles -> "Clear finished subtitles?"
+                else -> "Clear finished videos?"
+            },
+            message = "${if (finished == 1) "One saved $noun" else "$finished saved ${noun}s"} " +
                 "will leave this list. The files stay in Downloads/Magpie." +
                 if (module == Module.StillVideo) " They can no longer be edited." else "",
             primary = DialogAction("Clear list") {
-                if (module == Module.Downloader) vm.clearFinished() else still.clearFinished()
+                when (module) {
+                    Module.Downloader -> vm.clearFinished()
+                    Module.Subtitles -> subtitles.clearFinished()
+                    else -> still.clearFinished()
+                }
                 clearing = false
             },
             onDismiss = { clearing = false },
@@ -147,6 +161,7 @@ fun LibraryScreen(
             Module.Downloader -> DownloadList(jobs, vm)
             Module.StillVideo -> StillLibrary(stills, still, onOpen = vm::open, onEdit = onEditStill)
             Module.LiveMcq -> LiveMcqLibrary(livemcq)
+            Module.Subtitles -> SubtitleLibrary(subs, subtitles)
         }
     }
 }

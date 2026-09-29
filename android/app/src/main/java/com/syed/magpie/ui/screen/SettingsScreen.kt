@@ -15,12 +15,19 @@ import com.syed.magpie.BuildConfig
 import com.syed.magpie.data.Cookies
 import com.syed.magpie.data.formatBytes
 import com.syed.magpie.ui.MagpieViewModel
+import com.syed.magpie.ui.SubtitleViewModel
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import com.syed.magpie.ui.UpdateState
 import uniffi.magpie_core.coreVersion
 
 @Composable
 fun SettingsScreen(
     vm: MagpieViewModel,
+    subtitles: SubtitleViewModel,
     onSignIn: (Cookies.Site) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -63,6 +70,10 @@ fun SettingsScreen(
         }
 
         ImportCookiesRow { refresh++ }
+
+        Spacer(Modifier.height(22.dp))
+        SectionTitle("Gemini")
+        GeminiKeyCard(subtitles)
 
         Spacer(Modifier.height(22.dp))
         SectionTitle("Updates")
@@ -129,6 +140,61 @@ private fun ImportCookiesRow(onImported: () -> Unit) {
                 Spacer(Modifier.height(10.dp))
                 Text(it, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+/**
+ * The Subtitles module's key. The user's own, from Google AI Studio: Magpie
+ * ships none, because a key inside a public APK belongs to everyone.
+ */
+@Composable
+private fun GeminiKeyCard(vm: SubtitleViewModel) {
+    var draft by remember(vm.apiKey) { mutableStateOf(vm.apiKey) }
+    var shown by remember { mutableStateOf(false) }
+    val dirty = draft.trim() != vm.apiKey
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("API key", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Used by Subtitles. Free from aistudio.google.com; it stays on this " +
+                    "phone and is sent to Google alone.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                singleLine = true,
+                placeholder = { Text("AIza…") },
+                visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { shown = !shown }) {
+                        Icon(
+                            if (shown) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            if (shown) "Hide" else "Show",
+                        )
+                    }
+                },
+                shape = MaterialTheme.shapes.medium,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Action(if (vm.hasKey && !dirty) "Saved" else "Save") { vm.saveKey(draft) }
+                if (vm.hasKey && !dirty) {
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { vm.saveKey(""); draft = "" }) { Text("Forget") }
+                }
             }
         }
     }

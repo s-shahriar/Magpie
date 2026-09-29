@@ -21,12 +21,14 @@ import com.syed.magpie.ui.LiveMcqViewModel
 import com.syed.magpie.ui.MagpieViewModel
 import com.syed.magpie.ui.Module
 import com.syed.magpie.ui.StillVideoViewModel
+import com.syed.magpie.ui.SubtitleViewModel
 import com.syed.magpie.ui.theme.MagpieTheme
 
 class MainActivity : ComponentActivity() {
     private val vm: MagpieViewModel by viewModels()
     private val still: StillVideoViewModel by viewModels()
     private val livemcq: LiveMcqViewModel by viewModels()
+    private val subtitles: SubtitleViewModel by viewModels()
 
     /**
      * Android 13 stopped granting POST_NOTIFICATIONS with the manifest alone.
@@ -48,6 +50,7 @@ class MainActivity : ComponentActivity() {
                         vm = vm,
                         still = still,
                         livemcq = livemcq,
+                        subtitles = subtitles,
                     )
                 }
             }
@@ -76,8 +79,13 @@ class MainActivity : ComponentActivity() {
         // job back up if that is the row that was tapped. Consumed, so a
         // rotation or a return to the app does not retry it a second time.
         if (intent.getBooleanExtra(EXTRA_OPEN_LIBRARY, false)) {
+            // A module's own notification lands on that module's library.
+            intent.getStringExtra(EXTRA_LIBRARY_MODULE)
+                ?.let { name -> Module.entries.firstOrNull { it.name == name } }
+                ?.let { vm.libraryModule = it }
             vm.showLibrary()
             intent.removeExtra(EXTRA_OPEN_LIBRARY)
+            intent.removeExtra(EXTRA_LIBRARY_MODULE)
         }
         intent.getStringExtra(EXTRA_RETRY_JOB)?.let {
             vm.resume(it)
@@ -111,5 +119,6 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val EXTRA_OPEN_LIBRARY = "openLibrary"
         const val EXTRA_RETRY_JOB = "retryJob"
+        const val EXTRA_LIBRARY_MODULE = "libraryModule"
     }
 }
