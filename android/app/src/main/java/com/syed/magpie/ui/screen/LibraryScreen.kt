@@ -39,6 +39,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.syed.magpie.data.DhakaFlix
 import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadStatus
 import com.syed.magpie.data.formatBytes
@@ -74,6 +75,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Subtitles
 
 /**
  * Each module keeps its own library; the switcher under the title picks
@@ -86,6 +88,7 @@ fun LibraryScreen(
     livemcq: LiveMcqViewModel,
     subtitles: SubtitleViewModel,
     onEditStill: (StillJob) -> Unit,
+    onHints: (DownloadJob) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val jobs by vm.jobs.collectAsStateWithLifecycle()
@@ -94,7 +97,10 @@ fun LibraryScreen(
     var clearing by remember { mutableStateOf(false) }
     val module = vm.libraryModule
     val finished = when (module) {
-        Module.Downloader -> jobs.count { it.status == DownloadStatus.COMPLETED }
+        Module.Downloader -> jobs.count { it.status == DownloadStatus.COMPLETED && !it.isDhakaFlix }
+        Module.DhakaFlix -> jobs.count {
+            it.isDhakaFlix && (it.status == DownloadStatus.COMPLETED || it.status == DownloadStatus.FAILED)
+        }
         Module.StillVideo -> stills.count { it.status == StillStatus.COMPLETED }
         // Nothing to sweep: these rows are the files themselves, and each
         // one is deleted deliberately.
@@ -103,19 +109,29 @@ fun LibraryScreen(
     }
 
     if (clearing) {
-        val noun = if (module == Module.Subtitles) "subtitle file" else "video"
+        val noun = when (module) {
+            Module.Subtitles -> "subtitle file"
+            Module.DhakaFlix -> "file"
+            else -> "video"
+        }
         MagpieDialog(
             title = when (module) {
-                Module.Downloader -> "Clear finished downloads?"
+                Module.Downloader, Module.DhakaFlix -> "Clear finished downloads?"
                 Module.Subtitles -> "Clear finished subtitles?"
                 else -> "Clear finished videos?"
             },
-            message = "${if (finished == 1) "One saved $noun" else "$finished saved ${noun}s"} " +
-                "will leave this list. The files stay in Downloads/Magpie." +
+            message = if (module == Module.DhakaFlix) {
+                "${if (finished == 1) "One finished or failed download" else "$finished finished or failed downloads"} " +
+                    "will leave this list. Saved files stay in Downloads/${DhakaFlix.FOLDER}; " +
+                    "a failed one's partial bytes are deleted."
+            } else "${if (finished == 1) "One saved $noun" else "$finished saved ${noun}s"} " +
+                "will leave this list. The files stay in " +
+                (if (module == Module.DhakaFlix) "Downloads/${DhakaFlix.FOLDER}." else "Downloads/Magpie.") +
                 if (module == Module.StillVideo) " They can no longer be edited." else "",
             primary = DialogAction("Clear list") {
                 when (module) {
-                    Module.Downloader -> vm.clearFinished()
+                    Module.Downloader -> vm.clearFinished(dhakaflix = false)
+                    Module.DhakaFlix -> vm.clearFinished(dhakaflix = true)
                     Module.Subtitles -> subtitles.clearFinished()
                     else -> still.clearFinished()
                 }
@@ -158,7 +174,8 @@ fun LibraryScreen(
         Spacer(Modifier.height(18.dp))
 
         when (module) {
-            Module.Downloader -> DownloadList(jobs, vm)
+            Module.Downloader -> DownloadList(jobs.filterNot { it.isDhakaFlix }, vm)
+            Module.DhakaFlix -> DhakaFlixLibrary(jobs.filter { it.isDhakaFlix }, vm, onHints)
             Module.StillVideo -> StillLibrary(stills, still, onOpen = vm::open, onEdit = onEditStill)
             Module.LiveMcq -> LiveMcqLibrary(livemcq)
             Module.Subtitles -> SubtitleLibrary(subs, subtitles)
@@ -289,12 +306,15 @@ internal fun EmptyLibrary(text: String) {
     }
 }
 
+internal val DownloadJob.isDhakaFlix get() = source == DhakaFlix.SOURCE
+
 @Composable
-private fun JobCard(
+internal fun JobCard(
     job: DownloadJob,
     vm: MagpieViewModel,
     onConfirmDelete: () -> Unit,
     onRename: () -> Unit,
+    onHints: ((DownloadJob) -> Unit)? = null,
 ) {
     val done = job.status == DownloadStatus.COMPLETED
     // MERGING / SAVING cannot be interrupted safely.
@@ -302,7 +322,11 @@ private fun JobCard(
     LibraryCard(
         title = job.title,
         meta = listOfNotNull(
-            if (job.source == "facebook") "Facebook" else "Drive",
+            when (job.source) {
+                "facebook" -> "Facebook"
+                DhakaFlix.SOURCE -> "DhakaFlix"
+                else -> "Drive"
+            },
             job.quality,
             job.totalBytes?.takeIf { done }?.let(::formatBytes),
         ).joinToString(" · "),
@@ -310,12 +334,13 @@ private fun JobCard(
             video = job.outputUri?.takeIf { done }?.toUri(),
             icon = Icons.Default.Download,
         ),
+        savedIn = if (job.isDhakaFlix) "Downloads/${DhakaFlix.FOLDER}" else "Downloads/Magpie",
         status = if (done) CardStatus.Saved
         else CardStatus.Working(job.fraction, statusLine(job), failed = job.status == DownloadStatus.FAILED),
         primary = {
             when {
                 done -> CardButton(Icons.Default.PlayArrow, "Play") {
-                    job.outputUri?.let { vm.open(it.toUri()) }
+                    job.outputUri?.let { vm.open(it.toUri(), job.mime) }
                 }
                 job.status == DownloadStatus.DOWNLOADING ->
                     CardButton(Icons.Default.Pause, "Pause", accent = false) { vm.pause(job.id) }
@@ -331,7 +356,11 @@ private fun JobCard(
         },
         menu = buildList {
             if (done) {
-                add(CardAction("Share", Icons.Default.Share) { job.outputUri?.let { vm.share(it.toUri()) } })
+                add(CardAction("Share", Icons.Default.Share) { job.outputUri?.let { vm.share(it.toUri(), job.mime) } })
+                // A film or an .srt off DhakaFlix goes straight to Subtitles.
+                if (onHints != null) {
+                    add(CardAction("Add Bengali hints", Icons.Default.Subtitles) { onHints(job) })
+                }
                 add(CardAction("Rename", Icons.Default.DriveFileRenameOutline, onClick = onRename))
             }
             if (!locked) {
@@ -353,7 +382,11 @@ private fun JobCard(
     )
 }
 
-private fun statusLine(job: DownloadJob): String {
+internal fun statusLine(job: DownloadJob): String {
+    // Stopped by the network rather than by hand: say where, and why.
+    if (job.status == DownloadStatus.PAUSED && job.error != null) {
+        return "Stopped at ${(job.fraction * 100).toInt()}% — ${job.error}"
+    }
     job.error?.let { return it }
     // The stage is blank while bytes are moving — the bar says that much on
     // its own — so the parts are joined rather than concatenated, or the line

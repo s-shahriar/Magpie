@@ -98,6 +98,11 @@ class DownloadService : Service() {
             when (job.status) {
                 DownloadStatus.COMPLETED -> notifier.saved(job)
                 DownloadStatus.FAILED -> notifier.failed(job)
+                // Stopped by a dropped connection rather than by hand: the
+                // progress notification is about to go, so leave a way back.
+                DownloadStatus.PAUSED -> if (before == DownloadStatus.DOWNLOADING && job.error != null) {
+                    notifier.failed(job, stopped = true)
+                }
                 else -> if (before == DownloadStatus.COMPLETED || before == DownloadStatus.FAILED) {
                     notifier.clear(job.id)
                 }

@@ -72,7 +72,16 @@ class Downloader(private val context: Context) {
         // and a speed already says "downloading", and which of the two streams
         // is on the wire is an implementation detail. The label comes back for
         // the stages that are not self-evident — merging, saving, paused.
-        fetch(job.videoUrl, videoFile, cookie, "", videoShare, 0f, job, onTick)
+        // Every byte already here — a save that failed last time. Asking for
+        // the range past the end earns a 416 and a fresh download; skip
+        // straight to saving instead. Length alone proves nothing while a
+        // `.chunks` map exists: the segmented fetch sizes the file up front.
+        val chunkMap = File(videoFile.parentFile, videoFile.name + ".chunks")
+        val alreadyWhole = !needsAudio && job.totalBytes != null && !chunkMap.exists() &&
+            videoFile.exists() && videoFile.length() == job.totalBytes
+        if (!alreadyWhole) {
+            fetch(job.videoUrl, videoFile, cookie, "", videoShare, 0f, job, onTick)
+        }
         if (needsAudio) {
             fetch(job.audioUrl!!, audioFile, cookie, "", 0.1f, videoShare, job, onTick)
         }
@@ -83,7 +92,7 @@ class Downloader(private val context: Context) {
             // cache and then copying it into MediaStore meant a second full
             // pass over several hundred megabytes for no reason — on a 361 MB
             // video that copy alone was most of the wait.
-            uri = createPending(job.fileName)
+            uri = createPending(job)
             try {
                 context.contentResolver.openFileDescriptor(uri, "rw").use { pfd ->
                     checkNotNull(pfd) { "Could not open the output file" }
@@ -98,7 +107,7 @@ class Downloader(private val context: Context) {
             }
         } else {
             onTick(Tick(DownloadStatus.SAVING, "Saving", job.totalBytes ?: 0, job.totalBytes, 0))
-            uri = publish(videoFile, job.fileName)
+            uri = publish(videoFile, job)
         }
 
         videoFile.delete()
@@ -128,6 +137,7 @@ class Downloader(private val context: Context) {
         if (SegmentedFetch.worthIt(probe)) {
             val size = probe.total!!
             val began = System.nanoTime()
+            val window = RateWindow()
             val written = java.util.concurrent.atomic.AtomicLong(0)
             var lastAt = 0L
             SegmentedFetch.fetch(url, target, cookie, size) { delta ->
@@ -135,8 +145,7 @@ class Downloader(private val context: Context) {
                 val elapsed = System.nanoTime() - began
                 if (elapsed - lastAt >= REPORT_NANOS) {
                     lastAt = elapsed
-                    val secs = elapsed / 1_000_000_000.0
-                    val rate = if (secs > 0) (now / secs).toLong() else 0L
+                    val rate = window.add(elapsed, now)
                     val frac = (now.toFloat() / size).coerceIn(0f, 1f)
                     val done = overallOf(job)?.let { ((offset + frac * weight) * it).toLong() } ?: now
                     onTick(Tick(DownloadStatus.DOWNLOADING, stage, done, overallOf(job) ?: size, rate))
@@ -161,6 +170,7 @@ class Downloader(private val context: Context) {
         val overall = job.totalBytes
 
         val began = System.nanoTime()
+        val window = RateWindow()
         var copied = start
         var lastPct = -1
         var lastAt = 0L
@@ -181,8 +191,7 @@ class Downloader(private val context: Context) {
                         if (pct != lastPct || elapsed - lastAt >= REPORT_NANOS) {
                             lastPct = pct
                             lastAt = elapsed
-                            val secs = elapsed / 1_000_000_000.0
-                            val rate = if (secs > 0) ((copied - start) / secs).toLong() else 0L
+                            val rate = window.add(elapsed, copied)
                             val frac = total?.let { (copied.toFloat() / it).coerceIn(0f, 1f) } ?: 0f
                             val done = overall?.let { ((offset + frac * weight) * it).toLong() } ?: copied
                             onTick(Tick(DownloadStatus.DOWNLOADING, stage, done, overall ?: total, rate))
@@ -194,8 +203,17 @@ class Downloader(private val context: Context) {
             conn.disconnect()
         }
 
+        // An IOException, like any dropped connection: the bytes so far are
+        // good and the next attempt asks for the rest.
         if (total != null && target.length() < total) {
-            error("Transfer incomplete: ${target.length()} of $total bytes")
+            throw java.io.IOException("Incomplete — ${target.length()} of $total bytes")
+        }
+        // Longer than the server said means bytes were appended that do not
+        // belong — saving it would hand over a corrupt film, and its length is
+        // no longer a valid resume point either, so start clean.
+        if (total != null && target.length() > total) {
+            target.delete()
+            throw java.io.IOException("Corrupt partial file discarded — resume to restart")
         }
     }
 
@@ -321,11 +339,11 @@ class Downloader(private val context: Context) {
         }
     }
 
-    private fun createPending(fileName: String): Uri {
+    private fun createPending(job: DownloadJob): Uri {
         val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-            put(MediaStore.Downloads.MIME_TYPE, "video/mp4")
-            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Magpie")
+            put(MediaStore.Downloads.DISPLAY_NAME, job.fileName)
+            put(MediaStore.Downloads.MIME_TYPE, job.mime)
+            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/${job.folder}")
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         return context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -337,13 +355,13 @@ class Downloader(private val context: Context) {
         context.contentResolver.update(uri, done, null, null)
     }
 
-    /** Publish into Downloads/Magpie via MediaStore — no storage permission. */
-    private fun publish(file: File, fileName: String): Uri {
+    /** Publish into Downloads/<folder> via MediaStore — no storage permission. */
+    private fun publish(file: File, job: DownloadJob): Uri {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-            put(MediaStore.Downloads.MIME_TYPE, "video/mp4")
-            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/Magpie")
+            put(MediaStore.Downloads.DISPLAY_NAME, job.fileName)
+            put(MediaStore.Downloads.MIME_TYPE, job.mime)
+            put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/${job.folder}")
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -402,6 +420,24 @@ class Downloader(private val context: Context) {
 
         fun partFile(context: Context, id: String, kind: String): File =
             File(partsDir(context), "dl-$id-$kind.part")
+    }
+}
+
+/**
+ * Speed over the last few seconds rather than since the connection opened.
+ * An average from the start lags for minutes after a stall or a burst, and on
+ * a resumed segmented fetch it counted the chunks already on disk as speed.
+ */
+internal class RateWindow(private val spanNanos: Long = 3_000_000_000L) {
+    private val samples = ArrayDeque<Pair<Long, Long>>()
+
+    /** [at] in nanoseconds, [bytes] cumulative. Returns bytes per second. */
+    fun add(at: Long, bytes: Long): Long {
+        samples.addLast(at to bytes)
+        while (samples.size > 2 && at - samples.first().first > spanNanos) samples.removeFirst()
+        val (t0, b0) = samples.first()
+        val secs = (at - t0) / 1_000_000_000.0
+        return if (secs > 0) ((bytes - b0) / secs).toLong().coerceAtLeast(0) else 0L
     }
 }
 

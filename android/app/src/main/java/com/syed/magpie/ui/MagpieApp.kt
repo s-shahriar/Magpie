@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.syed.magpie.data.Cookies
 import com.syed.magpie.ui.component.QualitySheet
+import com.syed.magpie.ui.screen.DhakaFlixScreen
 import com.syed.magpie.ui.screen.HomeScreen
 import com.syed.magpie.ui.screen.LibraryScreen
 import com.syed.magpie.ui.screen.LiveMcqScreen
@@ -42,6 +43,7 @@ fun MagpieApp(
     still: StillVideoViewModel,
     livemcq: LiveMcqViewModel,
     subtitles: SubtitleViewModel,
+    dhakaflix: DhakaFlixViewModel,
 ) {
     var tab by remember { mutableStateOf(Tab.Modules) }
     var login by remember { mutableStateOf<Cookies.Site?>(null) }
@@ -108,6 +110,14 @@ fun MagpieApp(
                             tab = Tab.Library
                         },
                     )
+                    Module.DhakaFlix -> DhakaFlixScreen(
+                        dhakaflix,
+                        onBack = toHub,
+                        onLibrary = {
+                            vm.libraryModule = Module.DhakaFlix
+                            tab = Tab.Library
+                        },
+                    )
                     Module.Subtitles -> SubtitleScreen(
                         subtitles,
                         onBack = toHub,
@@ -127,6 +137,13 @@ fun MagpieApp(
                 onEditStill = {
                     still.edit(it)
                     vm.openModule(Module.StillVideo)
+                },
+                onHints = { job ->
+                    job.outputUri?.let { uri ->
+                        subtitles.pick(android.net.Uri.parse(uri), job.fileName)
+                        vm.enterModule(Module.Subtitles)
+                        tab = Tab.Modules
+                    }
                 },
             )
             Tab.Settings -> SettingsScreen(vm, subtitles, onSignIn = { login = it })

@@ -30,7 +30,12 @@ import java.util.UUID
  */
 object DownloadEngine {
 
-    private const val MAX_CONCURRENT = 2
+    /**
+     * How many run at once, per source. Facebook and Drive throttle each
+     * connection, so more than two only splits the same bandwidth; the
+     * DhakaFlix servers are on the LAN and serve four at full speed.
+     */
+    private fun capFor(source: String) = if (source == DhakaFlix.SOURCE) 4 else 2
 
     private val _jobs = MutableStateFlow<List<DownloadJob>>(emptyList())
     val jobs: StateFlow<List<DownloadJob>> = _jobs.asStateFlow()
@@ -52,6 +57,8 @@ object DownloadEngine {
         downloader = Downloader(appContext)
         _jobs.value = store.load()
         sweepOrphans()
+        // Jobs still waiting their turn when the process died carry on.
+        pump()
     }
 
     // ---- queue control -------------------------------------------------
@@ -66,6 +73,8 @@ object DownloadEngine {
         audioUrl: String?,
         fileName: String,
         totalBytes: Long?,
+        mime: String = "video/mp4",
+        folder: String = "Magpie",
     ) {
         val job = DownloadJob(
             id = UUID.randomUUID().toString(),
@@ -78,6 +87,8 @@ object DownloadEngine {
             audioUrl = audioUrl,
             fileName = fileName,
             totalBytes = totalBytes,
+            mime = mime,
+            folder = folder,
         )
         update { it + job }
         pump()
@@ -115,7 +126,13 @@ object DownloadEngine {
      */
     fun rename(id: String, title: String) = scope.launch {
         val job = current(id) ?: return@launch
-        val fileName = safeFileName(title, job.quality)
+        // A DhakaFlix file keeps its own extension: it is an .mkv or an .srt,
+        // not a merged MP4.
+        val fileName = if (job.source == DhakaFlix.SOURCE) {
+            DhakaFlix.fileName(title, job.fileName.substringAfterLast('.', ""))
+        } else {
+            safeFileName(title, job.quality)
+        }
         job.outputUri?.let { uri ->
             runCatching {
                 val values = android.content.ContentValues().apply {
@@ -127,9 +144,14 @@ object DownloadEngine {
         patch(id) { it.copy(title = title, fileName = fileName) }
     }
 
-    /** Clears finished rows without touching the saved files. */
-    fun clearFinished() {
-        update { list -> list.filterNot { it.status == DownloadStatus.COMPLETED } }
+    /** Clears finished rows of one library without touching the saved files. */
+    fun clearFinished(belongs: (DownloadJob) -> Boolean) {
+        update { list -> list.filterNot { it.status == DownloadStatus.COMPLETED && belongs(it) } }
+    }
+
+    /** Drops failed rows and the partial bytes they were holding. */
+    fun clearFailed(belongs: (DownloadJob) -> Boolean) {
+        _jobs.value.filter { it.status == DownloadStatus.FAILED && belongs(it) }.forEach { cancel(it.id) }
     }
 
     fun pauseAll() {
@@ -141,13 +163,24 @@ object DownloadEngine {
     private fun pump() {
         scope.launch {
             lock.withLock {
-                val activeIds = running.keys.toSet()
-                if (activeIds.size >= MAX_CONCURRENT) return@withLock
-                val next = _jobs.value
-                    .filter { it.status == DownloadStatus.QUEUED && it.id !in activeIds }
+                val all = _jobs.value
+                val busy = all.filter { it.id in running.keys }
+                    .groupingBy { it.source == DhakaFlix.SOURCE }
+                    .eachCount()
+                    .toMutableMap()
+                all.filter { it.status == DownloadStatus.QUEUED && it.id !in running.keys }
                     .sortedBy { it.createdAt }
-                    .take(MAX_CONCURRENT - activeIds.size)
-                next.forEach { job -> running[job.id] = launchJob(job) }
+                    .forEach { job ->
+                        val lane = job.source == DhakaFlix.SOURCE
+                        val n = busy[lane] ?: 0
+                        if (n < capFor(job.source)) {
+                            // Claimed under the lock, before the job's first
+                            // suspension, so a burst of enqueues cannot all
+                            // see a free slot and start at once.
+                            running[job.id] = launchJob(job)
+                            busy[lane] = n + 1
+                        }
+                    }
             }
             syncService()
         }
@@ -179,6 +212,29 @@ object DownloadEngine {
             partials(job.id).forEach { it.delete() }
         } catch (c: kotlinx.coroutines.CancellationException) {
             throw c
+        } catch (e: java.io.IOException) {
+            // A LAN server dropping out is not a failure: the bytes so far
+            // stay, and the row says where it stopped and why. Facebook and
+            // Drive links can expire, so there it stays a failure to retry.
+            if (job.source == DhakaFlix.SOURCE) {
+                patch(job.id) {
+                    it.copy(
+                        status = DownloadStatus.PAUSED,
+                        stage = "Paused",
+                        bytesPerSecond = 0,
+                        error = e.message ?: "Connection lost",
+                    )
+                }
+            } else {
+                patch(job.id) {
+                    it.copy(
+                        status = DownloadStatus.FAILED,
+                        stage = "Failed",
+                        bytesPerSecond = 0,
+                        error = e.message ?: "Download failed",
+                    )
+                }
+            }
         } catch (e: Throwable) {
             patch(job.id) {
                 it.copy(

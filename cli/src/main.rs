@@ -14,6 +14,9 @@ magpie — resolve and download media you have access to
 USAGE:
     magpie probe <url> [--cookies <file>]
     magpie get   <url> [--cookies <file>] [--quality lowest|highest|<id>] [--out <file>]
+    magpie dhakaflix categories
+    magpie dhakaflix search <query> [--category <id>] [--year <yyyy>]
+    magpie dhakaflix ls <folder-url>
 
 OPTIONS:
     --cookies <file>   Netscape cookies.txt (yt-dlp --cookies-from-browser chrome --cookies f)
@@ -35,6 +38,9 @@ fn run() -> Result<()> {
         return Ok(());
     }
     let cmd = args[0].clone();
+    if cmd == "dhakaflix" {
+        return dhakaflix(&args[1..]);
+    }
     let url = args.get(1).cloned().unwrap_or_default();
     if url.is_empty() {
         bail!("a URL is required\n\n{HELP}");
@@ -58,6 +64,60 @@ fn run() -> Result<()> {
         }
         "get" => download(&info, &quality, out, &cookie),
         other => bail!("unknown command `{other}`\n\n{HELP}"),
+    }
+}
+
+/// DhakaFlix lives on a LAN, so these only work from inside it.
+fn dhakaflix(args: &[String]) -> Result<()> {
+    let df = |e: magpie_core::DfError| anyhow::anyhow!("{e}");
+    match args.first().map(String::as_str) {
+        Some("categories") => {
+            for c in magpie_core::dhakaflix_categories() {
+                let year = if c.supports_year { "year" } else { "    " };
+                println!("  {:<22} {year}  {}  — {}", c.id, c.name, c.hint);
+            }
+            Ok(())
+        }
+        Some("search") => {
+            let query = args.get(1).filter(|q| !q.starts_with("--")).context("a query is required")?;
+            let category = flag(args, "--category").unwrap_or_else(|| "all".into());
+            let started = std::time::Instant::now();
+            let found = magpie_core::dhakaflix_search(category, query.clone(), flag(args, "--year"))
+                .map_err(df)?;
+            for item in &found.items {
+                println!(
+                    "  {} {:<70} {:>10}  {}",
+                    if item.is_folder { "D" } else { "F" },
+                    item.name,
+                    item.size_bytes.map(|b| fmt_size(Some(b))).unwrap_or_default(),
+                    item.label.as_deref().unwrap_or(""),
+                );
+            }
+            println!(
+                "\n{} result(s) in {:.1}s{}{}",
+                found.items.len(),
+                started.elapsed().as_secs_f64(),
+                if found.truncated { ", truncated" } else { "" },
+                if found.used_fallback { ", via folder listing" } else { "" },
+            );
+            if !found.failed_sources.is_empty() {
+                println!("couldn't reach: {}", found.failed_sources.join(", "));
+            }
+            Ok(())
+        }
+        Some("ls") => {
+            let url = args.get(1).context("a folder URL is required")?;
+            let folder = magpie_core::dhakaflix_folder(url.clone()).map_err(df)?;
+            if let Some(p) = &folder.poster {
+                println!("poster: {p}");
+            }
+            for item in &folder.items {
+                println!("  {} {}", if item.is_folder { "D" } else { "F" }, item.name);
+                println!("      {}", item.url);
+            }
+            Ok(())
+        }
+        _ => bail!("usage: magpie dhakaflix categories | search <query> | ls <url>\n\n{HELP}"),
     }
 }
 

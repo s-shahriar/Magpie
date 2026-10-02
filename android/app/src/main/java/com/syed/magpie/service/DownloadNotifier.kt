@@ -149,7 +149,7 @@ class DownloadNotifier(private val context: Context) {
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(
                     buildString {
-                        append("Saved to Downloads/Magpie")
+                        append("Saved to Downloads/${job.folder}")
                         append("\n${job.quality}")
                         if (size > 0) append(" · ${formatBytes(size)}")
                     },
@@ -160,7 +160,7 @@ class DownloadNotifier(private val context: Context) {
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setGroup(GROUP_FINISHED)
             .setAutoCancel(true)
-            .setContentIntent(play ?: openLibrary())
+            .setContentIntent(play ?: openLibrary(job))
             .apply {
                 if (play != null) addAction(R.drawable.ic_notif_play, "Play", play)
             }
@@ -175,12 +175,13 @@ class DownloadNotifier(private val context: Context) {
      * blocked on Android 12+, so the tap opens Magpie and the queue picks up
      * from there — with the partial file still on disk, so nothing is refetched.
      */
-    fun failed(job: DownloadJob) {
+    fun failed(job: DownloadJob, stopped: Boolean = false) {
         val retry = activity(
             Intent(context, MainActivity::class.java)
                 .setAction(Intent.ACTION_MAIN)
                 .putExtra(MainActivity.EXTRA_OPEN_LIBRARY, true)
-                .putExtra(MainActivity.EXTRA_RETRY_JOB, job.id),
+                .putExtra(MainActivity.EXTRA_RETRY_JOB, job.id)
+                .putExtra(MainActivity.EXTRA_LIBRARY_MODULE, moduleOf(job)),
             requestCode = idFor(job) + 1,
         )
 
@@ -190,14 +191,14 @@ class DownloadNotifier(private val context: Context) {
             .setContentTitle(job.title)
             .setContentText(reason)
             .setStyle(NotificationCompat.BigTextStyle().bigText(reason))
-            .setSubText("Download failed")
+            .setSubText(if (stopped) "Download stopped" else "Download failed")
             .setColor(danger)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setGroup(GROUP_FINISHED)
             .setAutoCancel(true)
             .setContentIntent(retry)
-            .addAction(R.drawable.ic_notif_retry, "Retry", retry)
+            .addAction(R.drawable.ic_notif_retry, if (stopped) "Resume" else "Retry", retry)
             .build()
 
         manager.notify(idFor(job), n)
@@ -208,16 +209,17 @@ class DownloadNotifier(private val context: Context) {
 
     // ---- intents -------------------------------------------------------
 
-    private fun openLibrary() = activity(
+    private fun openLibrary(job: DownloadJob? = null) = activity(
         Intent(context, MainActivity::class.java)
             .setAction(Intent.ACTION_MAIN)
-            .putExtra(MainActivity.EXTRA_OPEN_LIBRARY, true),
-        requestCode = 0,
+            .putExtra(MainActivity.EXTRA_OPEN_LIBRARY, true)
+            .apply { job?.let { putExtra(MainActivity.EXTRA_LIBRARY_MODULE, moduleOf(it)) } },
+        requestCode = if (job == null) 0 else idFor(job) + 3,
     )
 
     private fun viewVideo(uri: String, job: DownloadJob) = activity(
         Intent(Intent.ACTION_VIEW)
-            .setDataAndType(Uri.parse(uri), "video/mp4")
+            .setDataAndType(Uri.parse(uri), job.mime)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
         requestCode = idFor(job),
     )
@@ -237,6 +239,10 @@ class DownloadNotifier(private val context: Context) {
             .putExtra(DownloadService.EXTRA_JOB_ID, jobId),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
+
+    /** Which library a tap should land on. */
+    private fun moduleOf(job: DownloadJob) =
+        if (job.source == com.syed.magpie.data.DhakaFlix.SOURCE) "DhakaFlix" else "Downloader"
 
     /** Stable per job, and never the foreground id. */
     private fun idFor(job: DownloadJob): Int = idFor(job.id)

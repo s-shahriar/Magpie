@@ -38,6 +38,10 @@ data class DownloadJob(
     val error: String? = null,
     val outputUri: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
+    /** What the saved file is. Facebook and Drive are always merged to MP4. */
+    val mime: String = "video/mp4",
+    /** Under Downloads/, where the saved file goes. */
+    val folder: String = "Magpie",
 ) {
     val fraction: Float
         get() {
@@ -76,6 +80,8 @@ data class DownloadJob(
         put("error", error ?: JSONObject.NULL)
         put("outputUri", outputUri ?: JSONObject.NULL)
         put("createdAt", createdAt)
+        put("mime", mime)
+        put("folder", folder)
     }
 
     companion object {
@@ -97,6 +103,8 @@ data class DownloadJob(
             error = o.optStringOrNull("error"),
             outputUri = o.optStringOrNull("outputUri"),
             createdAt = o.optLong("createdAt", System.currentTimeMillis()),
+            mime = o.optString("mime", "video/mp4"),
+            folder = o.optString("folder", "Magpie"),
         )
 
         fun listToJson(jobs: List<DownloadJob>): String =

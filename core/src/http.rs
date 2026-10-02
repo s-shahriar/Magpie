@@ -19,6 +19,11 @@ static CLIENT: Lazy<reqwest::blocking::Client> = Lazy::new(|| {
         .expect("http client")
 });
 
+/// The shared client, for callers that build their own requests.
+pub(crate) fn client() -> &'static reqwest::blocking::Client {
+    &CLIENT
+}
+
 fn net<E: std::fmt::Display>(e: E) -> MagpieError {
     MagpieError::Network { msg: e.to_string() }
 }

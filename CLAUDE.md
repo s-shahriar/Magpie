@@ -79,6 +79,22 @@ after an uninstall. Back both up.
 4. Verify on the desktop first — `magpie probe <url> --cookies ck.txt` — before
    touching the app. Much faster loop than rebuilding an APK.
 
+## DhakaFlix module
+
+Searches and browses the DhakaFlix h5ai servers (`172.16.50.{7,9,12,14}`, LAN
+only, plain HTTP). Search/listing/ranking live in `core/src/dhakaflix/`;
+downloads go through the normal `DownloadEngine` with `source = "dhakaflix"`,
+saved under their own name to `Downloads/Magpie/DhakaFlix`. Spec and the
+feature list carried over from the old FTPDownloader app:
+`specs/dhakaflix-module.md`.
+
+- Test search from the desktop on the LAN: `magpie dhakaflix search <q> --category <id> [--year y]`.
+- `res/xml/network_security_config.xml` whitelists those IPs for cleartext.
+  Remove it and downloads/posters fail (the Rust core's requests are unaffected,
+  which makes the breakage confusing).
+- The engine runs 4 DhakaFlix jobs at once and 2 of everything else; a dropped
+  LAN connection parks a job as Paused with the reason, not Failed.
+
 ## House rules
 
 - Renditions are always sorted smallest-first, unknown sizes last; the UI marks

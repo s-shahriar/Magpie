@@ -108,7 +108,7 @@ object SegmentedFetch {
                                     written += n
                                     onBytes(n.toLong())
                                 }
-                                if (written < want) error("Short chunk $index")
+                                if (written < want) throw java.io.IOException("Connection dropped mid-chunk")
                             }
                         } finally {
                             c.disconnect()

@@ -11,6 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.syed.magpie.data.Catalog
 import com.syed.magpie.data.Cookies
+import com.syed.magpie.data.DhakaFlix
 import androidx.core.net.toUri
 import com.syed.magpie.data.DownloadEngine
 import com.syed.magpie.data.DownloadJob
@@ -254,7 +255,12 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cancel(id: String) = DownloadEngine.cancel(id)
 
-    fun clearFinished() = DownloadEngine.clearFinished()
+    /** Clears one library's finished rows: DhakaFlix's, or everything else's. */
+    fun clearFinished(dhakaflix: Boolean) {
+        DownloadEngine.clearFinished { (it.source == DhakaFlix.SOURCE) == dhakaflix }
+        // DhakaFlix's "Done" holds failed rows too, so clearing it clears them.
+        if (dhakaflix) DownloadEngine.clearFailed { it.source == DhakaFlix.SOURCE }
+    }
 
     /**
      * Removes the row and the saved video.
@@ -276,9 +282,9 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         if (title.isNotBlank()) DownloadEngine.rename(job.id, title.trim())
     }
 
-    fun share(uri: Uri) {
+    fun share(uri: Uri, mime: String = "video/mp4") {
         val send = Intent(Intent.ACTION_SEND)
-            .setType("video/mp4")
+            .setType(mime)
             .putExtra(Intent.EXTRA_STREAM, uri)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         val chooser = Intent.createChooser(send, "Share video")
@@ -286,11 +292,16 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { getApplication<Application>().startActivity(chooser) }
     }
 
-    fun open(uri: Uri) {
+    fun open(uri: Uri, mime: String = "video/mp4") {
         val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, "video/mp4")
+            .setDataAndType(uri, mime)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { getApplication<Application>().startActivity(intent) }
+        val app = getApplication<Application>()
+        runCatching { app.startActivity(intent) }.onFailure {
+            // An .mkv or an .srt has fewer takers than an MP4; say so rather
+            // than leaving the tap to do nothing.
+            android.widget.Toast.makeText(app, "No app on this phone can open this file", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     // ---- updates -------------------------------------------------------

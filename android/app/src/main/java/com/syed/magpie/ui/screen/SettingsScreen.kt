@@ -159,7 +159,7 @@ private fun GeminiKeyCard(vm: SubtitleViewModel) {
             Text("API key", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             Text(
-                "Used by Subtitles. Free from aistudio.google.com; it stays on this " +
+                "Used by Subtitles and DhakaFlix's AI search. Free from aistudio.google.com; it stays on this " +
                     "phone and is sent to Google alone.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

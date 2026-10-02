@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Everything is HTTPS except the DhakaFlix servers: plain-HTTP h5ai on the
+  172.16.50.x LAN, with no certificate to offer. Only those hosts are let
+  through. (The Rust core's own requests do not pass through this config;
+  downloads and posters, made from Kotlin, do.)
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">172.16.50.7</domain>
+        <domain includeSubdomains="false">172.16.50.8</domain>
+        <domain includeSubdomains="false">172.16.50.9</domain>
+        <domain includeSubdomains="false">172.16.50.12</domain>
+        <domain includeSubdomains="false">172.16.50.14</domain>
+    </domain-config>
+</network-security-config>
