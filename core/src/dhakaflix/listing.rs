@@ -169,6 +169,67 @@ pub fn fetch(url: &str, timeout: Duration) -> Result<Vec<DfItem>, DfError> {
     Ok(parse_listing(&html, url))
 }
 
+/// A folder through h5ai's own API, which — unlike the HTML page — carries
+/// each entry's size and date. `Ok(None)` when the server does not speak the
+/// API, so the caller can fall back to the page; a network failure is an
+/// error, not a reason to wait out a second timeout on the same server.
+pub fn fetch_api(folder_url: &str, timeout: Duration) -> Result<Option<Vec<DfItem>>, DfError> {
+    let origin = origin_of(folder_url).to_string();
+    let path = &folder_url[origin.len()..];
+    let Some(first) = path.split('/').find(|p| !p.is_empty()) else {
+        return Ok(None);
+    };
+    let endpoint = format!("{origin}/{first}/");
+    let href = canonical_href(if path.ends_with('/') { path } else { return Ok(None) });
+    let body = serde_json::json!({ "action": "get", "items": { "href": href, "what": 1 } });
+    let resp = crate::http::client()
+        .post(&endpoint)
+        .header("content-type", "application/json")
+        .body(body.to_string())
+        .timeout(timeout)
+        .send()
+        .map_err(|e| DfError::from_send(e, &endpoint, timeout))?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    let text = resp.text().map_err(|e| DfError::from_send(e, &endpoint, timeout))?;
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Ok(None);
+    };
+    let Some(entries) = json.get("items").and_then(|i| i.as_array()) else {
+        return Ok(None);
+    };
+    Ok(Some(children(entries, &origin, &href)))
+}
+
+/// The direct children of `parent` out of an h5ai `items` reply, which also
+/// lists the folder itself and its ancestors. Folders first, then by name —
+/// the order h5ai's own page shows.
+pub fn children(entries: &[serde_json::Value], origin: &str, parent: &str) -> Vec<DfItem> {
+    let mut items: Vec<DfItem> = entries
+        .iter()
+        .filter_map(|e| {
+            let href = canonical_href(e.get("href")?.as_str()?);
+            let folder = href.ends_with('/');
+            let trimmed = href.trim_end_matches('/');
+            let (dir, name) = trimmed.rsplit_once('/')?;
+            if format!("{dir}/") != parent || name.is_empty() {
+                return None;
+            }
+            Some(DfItem {
+                name: decode(name),
+                url: format!("{origin}{href}"),
+                is_folder: folder,
+                label: None,
+                size_bytes: if folder { None } else { e.get("size").and_then(|s| s.as_f64()).map(|s| s as u64) },
+                modified_ms: e.get("time").and_then(|t| t.as_f64()).map(|t| t as i64).filter(|t| *t > 0),
+            })
+        })
+        .collect();
+    items.sort_by(|a, b| b.is_folder.cmp(&a.is_folder).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    items
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +273,28 @@ mod tests {
         assert!(pick_poster(&items).unwrap().ends_with("/a_AL_.jpg"));
         let media = media_only(items);
         assert!(media.iter().all(|i| i.is_folder || i.name.ends_with(".mkv")));
+    }
+
+    #[test]
+    fn api_items_keep_only_direct_children() {
+        let reply: serde_json::Value = serde_json::from_str(r#"{"items":[
+            {"href":"/DHAKA-FLIX-14/","time":1,"size":null},
+            {"href":"/DHAKA-FLIX-14/K/","time":1,"size":null},
+            {"href":"/DHAKA-FLIX-14/K/Show%20(2019)/S01E02.mkv","time":1700000000000,"size":1500000000},
+            {"href":"/DHAKA-FLIX-14/K/Show%20(2019)/S01E01.mkv","time":1700000000000,"size":1400000000},
+            {"href":"/DHAKA-FLIX-14/K/Show%20(2019)/Extras/","time":1700000000000,"size":null},
+            {"href":"/DHAKA-FLIX-14/K/Show%20(2019)/Extras/x.mkv","time":1,"size":1}
+        ]}"#).unwrap();
+        let items = children(
+            reply["items"].as_array().unwrap(),
+            "http://172.16.50.14",
+            "/DHAKA-FLIX-14/K/Show%20(2019)/",
+        );
+        let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["Extras", "S01E01.mkv", "S01E02.mkv"]);
+        assert_eq!(items[1].size_bytes, Some(1_400_000_000));
+        assert_eq!(items[1].url, "http://172.16.50.14/DHAKA-FLIX-14/K/Show%20(2019)/S01E01.mkv");
+        assert_eq!(items[0].size_bytes, None);
     }
 
     #[test]

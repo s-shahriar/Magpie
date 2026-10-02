@@ -9,7 +9,7 @@ class DhakaFlixAiTest {
     @Test
     fun `matches map to categories and sort newest first, unknown year last`() {
         val text = """```json
-            [{"title":"Squid Game","year":null,"industry":"Korean","type":"tv_series","language":"Korean"},
+            [{"title":"Squid Game","year":"2021-2025","industry":"Korean","type":"tv_series","language":"Korean"},
              {"title":"Pushpa","year":"2021","industry":"South Indian","type":"movie","language":"Telugu"},
              {"title":"Pushpa 2","year":2024,"industry":"South Indian","type":"movie","language":"Telugu"},
              {"title":"","year":"2020","industry":"Hollywood","type":"movie"},
@@ -17,12 +17,12 @@ class DhakaFlixAiTest {
             ```"""
         val body = """{"candidates":[{"content":{"parts":[{"text":${org.json.JSONObject.quote(text)}}]}}]}"""
         val m = DhakaFlixAi.parse(body)
-        assertEquals(listOf("Pushpa 2", "Pushpa", "Odd", "Squid Game"), m.map { it.title })
+        assertEquals(listOf("Pushpa 2", "Squid Game", "Pushpa", "Odd"), m.map { it.title })
         assertEquals("2024", m[0].year)
         assertEquals("south_indian_movies", m[0].categoryId)
-        assertNull(m[2].categoryId)
-        assertEquals("korean_tv_series", m[3].categoryId)
-        assertNull(m[3].year)
+        assertNull(m[3].categoryId)
+        assertEquals("korean_tv_series", m[1].categoryId)
+        assertEquals("2021", m[1].year)
     }
 
     @Test

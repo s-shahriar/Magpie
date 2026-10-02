@@ -28,17 +28,39 @@ object DhakaFlixAi {
 
     private const val ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    fun identify(apiKey: String, model: Gemini.Model, query: String): List<Match> {
+    /**
+     * Not the Subtitles list: what matters here is Google Search grounding,
+     * and the free tier gives the 3.x models no grounding quota at all — a
+     * grounded request is refused with a 429 while the same key annotates
+     * subtitles happily. Checked 2026-10-02 against a free key.
+     */
+    enum class Model(val id: String, val label: String) {
+        FLASH_35("gemini-3.5-flash", "3.5 Flash"),
+        FLASH_25("gemini-2.5-flash", "2.5 Flash · live search"),
+    }
+
+    fun identify(apiKey: String, model: Model, query: String): List<Match> {
         if (apiKey.isBlank()) {
             throw IOException("No Gemini API key yet. Add yours in Settings → Gemini.")
         }
+        return try {
+            parse(ask(apiKey, model, query, grounded = true))
+        } catch (e: Gemini.RateLimited) {
+            // Grounding refused, not the model: ask again from what the model
+            // already knows. Very new releases may be missing, but a title the
+            // user half-remembers is still found.
+            parse(ask(apiKey, model, query, grounded = false))
+        }
+    }
+
+    private fun ask(apiKey: String, model: Model, query: String, grounded: Boolean): String {
         val body = JSONObject()
             .put(
                 "contents",
                 JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt(query))))),
             )
-            .put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
             .put("generationConfig", JSONObject().put("temperature", 0.1))
+        if (grounded) body.put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
 
         val conn = URL("$ENDPOINT/${model.id}:generateContent").openConnection() as HttpURLConnection
         val text = try {
@@ -57,7 +79,7 @@ object DhakaFlixAi {
         } finally {
             conn.disconnect()
         }
-        return parse(text)
+        return text
     }
 
     internal fun parse(reply: String): List<Match> {
@@ -78,7 +100,9 @@ object DhakaFlixAi {
                 val series = it.optString("type") == "tv_series"
                 Match(
                     title = it.optString("title"),
-                    year = it.opt("year")?.takeUnless { y -> y == JSONObject.NULL }?.toString()?.takeIf { y -> y.isNotBlank() },
+                    // A series comes back as "2019-2020"; the year field wants one year.
+                    year = it.opt("year")?.takeUnless { y -> y == JSONObject.NULL }?.toString()
+                        ?.let { y -> Regex("\\d{4}").find(y)?.value },
                     industry = industry,
                     isSeries = series,
                     language = it.optString("language"),

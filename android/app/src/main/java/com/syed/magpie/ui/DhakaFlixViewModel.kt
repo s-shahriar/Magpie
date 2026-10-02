@@ -10,7 +10,6 @@ import androidx.lifecycle.viewModelScope
 import com.syed.magpie.data.DhakaFlix
 import com.syed.magpie.data.DhakaFlixAi
 import com.syed.magpie.data.DownloadEngine
-import com.syed.magpie.data.Gemini
 import com.syed.magpie.data.SubtitlePrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -169,7 +168,12 @@ class DhakaFlixViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val outcome = DhakaFlix.folder(page.url)
             outcome
-                .onSuccess { f -> replace(page.url) { it.copy(folder = f, loading = false) } }
+                .onSuccess { f ->
+                    // "Season 1" has no poster of its own; the show above it does.
+                    val inherited = pages.takeWhile { it.url != page.url }.lastOrNull()?.folder?.poster
+                    val shown = if (f.poster == null && inherited != null) f.copy(poster = inherited) else f
+                    replace(page.url) { it.copy(folder = shown, loading = false) }
+                }
                 .onFailure { e ->
                     replace(page.url) { it.copy(loading = false) }
                     problem = DhakaFlix.problemOf(e)
@@ -200,12 +204,12 @@ class DhakaFlixViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     fun download(item: DfItem, categoryName: String = category.name) {
-        val queued = DhakaFlix.download(item.url, item.name, item.sizeBytes?.toLong(), categoryName)
-        snack = if (queued) {
-            val short = if (item.name.length > 40) item.name.take(37) + "…" else item.name
-            Snack("Downloading “$short”", action = "View")
-        } else {
-            Snack("Already downloading — see the library")
+        // A download that starts at once needs no message: the strip at the
+        // bottom appears with it. Only waiting or a duplicate is news.
+        snack = when (DhakaFlix.download(item.url, item.name, item.sizeBytes?.toLong(), categoryName)) {
+            DhakaFlix.Queued.STARTED -> null
+            DhakaFlix.Queued.WAITING -> Snack("Queued — starts when one of the four finishes", action = "View")
+            DhakaFlix.Queued.DUPLICATE -> Snack("Already downloading", action = "View")
         }
     }
 
@@ -215,7 +219,7 @@ class DhakaFlixViewModel(app: Application) : AndroidViewModel(app) {
 
     var aiOpen by mutableStateOf(false)
         private set
-    var aiModel by mutableStateOf(Gemini.Model.FLASH_LITE)
+    var aiModel by mutableStateOf(DhakaFlixAi.Model.FLASH_35)
     var ai by mutableStateOf<AiState>(AiState.Idle)
         private set
 

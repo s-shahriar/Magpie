@@ -1,7 +1,11 @@
 package com.syed.magpie.ui.screen
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,7 +28,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -40,7 +47,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.syed.magpie.data.DhakaFlix
 import com.syed.magpie.data.DhakaFlixAi
 import com.syed.magpie.data.DownloadStatus
-import com.syed.magpie.data.Gemini
 import com.syed.magpie.data.formatBytes
 import com.syed.magpie.ui.AiState
 import com.syed.magpie.ui.DhakaFlixViewModel
@@ -81,7 +87,7 @@ fun DhakaFlixScreen(
         }
 
         Column(
-            Modifier.align(Alignment.BottomCenter).padding(horizontal = 22.dp).padding(bottom = 104.dp),
+            Modifier.align(Alignment.BottomCenter).padding(horizontal = 26.dp).padding(bottom = 104.dp),
         ) {
             DownloadingStrip(vm, onLibrary)
             SnackbarHost(snackbar)
@@ -101,10 +107,17 @@ private fun SearchHome(vm: DhakaFlixViewModel, onBack: () -> Unit) {
     var showHistory by remember { mutableStateOf(false) }
     val results = vm.results
 
-    // Pulling down runs the search again, as the old app's home did.
+    // Pulling down runs the search again, as the old app's home did. Its
+    // indicator is for a pull only — a search from the button already has
+    // the button's own spinner, and two at once read as two searches.
+    var pulled by remember { mutableStateOf(false) }
+    LaunchedEffect(vm.searching) { if (!vm.searching) pulled = false }
     PullToRefreshBox(
-        isRefreshing = vm.searching,
-        onRefresh = { vm.search() },
+        isRefreshing = pulled && vm.searching,
+        onRefresh = {
+            pulled = true
+            vm.search()
+        },
         modifier = Modifier.fillMaxSize(),
     ) {
     LazyColumn(
@@ -119,23 +132,7 @@ private fun SearchHome(vm: DhakaFlixViewModel, onBack: () -> Unit) {
             Label("Browse by category")
             Spacer(Modifier.height(8.dp))
             CategoryCard(vm.category, vm.categories.size) { picking = true }
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    iconFor(vm.category.icon),
-                    null,
-                    Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    vm.category.hint,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontStyle = FontStyle.Italic,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(18.dp))
             Label("Search")
             Spacer(Modifier.height(8.dp))
             SearchForm(vm, onHistory = { showHistory = true })
@@ -384,6 +381,12 @@ private fun ResultRow(
     onDownload: () -> Unit,
     onCopied: () -> Unit,
 ) {
+    // A title folder is the thing being looked for, so it gets its poster
+    // large and its name taken apart; plain folders and files stay compact.
+    if (item.isFolder && DhakaFlix.describe(item.name).year != null) {
+        TitleCard(item, showPoster, onOpen)
+        return
+    }
     val clipboard = LocalClipboardManager.current
     Surface(
         shape = MaterialTheme.shapes.medium,
@@ -391,9 +394,7 @@ private fun ResultRow(
         modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).clickable(onClick = onOpen),
     ) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (showPoster && item.isFolder) {
-                Poster(item.url, null, 44, 66)
-            } else {
+            run {
                 Box(
                     Modifier.size(44.dp).clip(MaterialTheme.shapes.small)
                         .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
@@ -412,7 +413,14 @@ private fun ResultRow(
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(item.name, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                // Episode names share a long prefix; the part that differs —
+                // quality, codec, audio — is at the end, so files get a line more.
+                Text(
+                    item.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = if (item.isFolder) 2 else 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 val meta = listOfNotNull(
                     item.sizeBytes?.let { formatBytes(it.toLong()) },
                     item.modifiedMs?.let {
@@ -443,7 +451,7 @@ private fun ResultRow(
                     clipboard.setText(AnnotatedString(item.url))
                     onCopied()
                 }) { Icon(Icons.Default.Link, "Copy link", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                FilledTonalIconButton(onClick = onDownload) { Icon(Icons.Default.Download, "Download") }
+                com.syed.magpie.ui.component.CardButton(Icons.Default.Download, "Download", onClick = onDownload)
             }
         }
     }
@@ -463,21 +471,173 @@ private fun Badge(text: String) {
     )
 }
 
+/** A search hit that is a film or a show: poster, title, year, release tags. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun Poster(folderUrl: String, knownImage: String?, width: Int, height: Int) {
-    val image by produceState<ImageBitmap?>(null, folderUrl, knownImage) {
-        value = DhakaFlix.poster(folderUrl, knownImage)
+private fun TitleCard(item: DfItem, showPoster: Boolean, onOpen: () -> Unit) {
+    val t = DhakaFlix.describe(item.name)
+    Surface(
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).clickable(onClick = onOpen),
+    ) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Poster(if (showPoster) item.url else null, null, t.title, 72, 108)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(t.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    t.year?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    item.label?.let {
+                        Spacer(Modifier.width(8.dp))
+                        Badge(it)
+                    }
+                }
+                if (t.tags.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) { t.tags.forEach { Tag(it) } }
+                }
+                item.modifiedMs?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Added " + DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(it)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
+}
+
+/** A release tag — "1080p", "NF", "Dual Audio" — quieter than the source badge. */
+@Composable
+private fun Tag(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        modifier = Modifier
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+/**
+ * A poster in the 2:3 of a film sheet. Until it arrives — or when there is
+ * none — the title's initial on a warm wash holds its place, so a list of
+ * posters loading one by one does not flicker between icons and pictures.
+ */
+@Composable
+private fun Poster(folderUrl: String?, knownImage: String?, title: String, width: Int, height: Int) {
+    val image by produceState<ImageBitmap?>(null, folderUrl, knownImage) {
+        value = folderUrl?.let { DhakaFlix.poster(it, knownImage) }
+    }
+    val shape = RoundedCornerShape(10.dp)
     Box(
-        Modifier.size(width.dp, height.dp).clip(MaterialTheme.shapes.small)
-            .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        Modifier
+            .size(width.dp, height.dp)
+            .shadow(4.dp, shape)
+            .clip(shape)
+            .background(
+                Brush.linearGradient(
+                    listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)),
+                ),
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        val b = image
-        if (b != null) {
-            Image(b, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        } else {
-            Icon(Icons.Default.Folder, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            title.trim().firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.55f),
+        )
+        AnimatedVisibility(image != null, enter = fadeIn(tween(350)), modifier = Modifier.matchParentSize()) {
+            image?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+        }
+    }
+}
+
+/**
+ * The top of a folder: the poster blurred into the card's background, the
+ * sharp one in front, and the name taken apart beside it.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FolderHero(page: FolderPage, onBack: () -> Unit) {
+    val folder = page.folder
+    val t = DhakaFlix.describe(page.name)
+    val folders = folder?.items?.count { it.isFolder } ?: 0
+    val files = (folder?.items?.size ?: 0) - folders
+    val backdrop by produceState<ImageBitmap?>(null, page.url, folder?.poster) {
+        value = folder?.poster?.let { DhakaFlix.poster(page.url, it) }
+    }
+    val card = MaterialTheme.colorScheme.surfaceVariant
+
+    Box(Modifier.offset(x = (-10).dp).size(44.dp).clip(CircleShape).clickable(onClick = onBack), contentAlignment = Alignment.Center) {
+        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+    }
+    Spacer(Modifier.height(8.dp))
+    Box(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(card)) {
+        backdrop?.let {
+            Image(
+                it,
+                null,
+                Modifier.matchParentSize().blur(28.dp).alpha(0.6f),
+                contentScale = ContentScale.Crop,
+            )
+            // Fade the picture into the card so the text below stays legible.
+            Box(
+                Modifier.matchParentSize().background(
+                    Brush.verticalGradient(listOf(card.copy(alpha = 0.25f), card.copy(alpha = 0.92f))),
+                ),
+            )
+        }
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.Bottom) {
+            Poster(if (folder?.poster != null) page.url else null, folder?.poster, t.title, 104, 156)
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    page.category.uppercase(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(t.title, style = MaterialTheme.typography.titleLarge, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                t.year?.let {
+                    Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (t.tags.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) { t.tags.forEach { Tag(it) } }
+                }
+                if (folder != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        if (folder.items.isEmpty()) "Empty"
+                        else listOfNotNull(
+                            folders.takeIf { it > 0 }?.let { "$it folder${if (it == 1) "" else "s"}" },
+                            files.takeIf { it > 0 }?.let { "$it file${if (it == 1) "" else "s"}" },
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
@@ -485,8 +645,6 @@ private fun Poster(folderUrl: String, knownImage: String?, width: Int, height: I
 @Composable
 private fun FolderBrowser(page: FolderPage, vm: DhakaFlixViewModel, onBack: () -> Unit) {
     val folder = page.folder
-    val folders = folder?.items?.count { it.isFolder } ?: 0
-    val files = (folder?.items?.size ?: 0) - folders
 
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 22.dp),
@@ -495,47 +653,8 @@ private fun FolderBrowser(page: FolderPage, vm: DhakaFlixViewModel, onBack: () -
     ) {
         item {
             Spacer(Modifier.height(26.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.offset(x = (-10).dp).size(44.dp).clip(CircleShape).clickable(onClick = onBack),
-                    contentAlignment = Alignment.Center,
-                ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                Column(Modifier.weight(1f)) {
-                    Text(page.name, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (folder != null) {
-                        Text(
-                            if (folder.items.isEmpty()) "Empty"
-                            else "$folders folder${if (folders == 1) "" else "s"} · $files file${if (files == 1) "" else "s"}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceVariant) {
-                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (folder?.poster != null) {
-                        Poster(page.url, folder.poster, 60, 90)
-                        Spacer(Modifier.width(12.dp))
-                    }
-                    Column {
-                        Text(
-                            page.category.uppercase(),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            DhakaFlix.pathOf(page.url),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
+            FolderHero(page, onBack)
+            Spacer(Modifier.height(6.dp))
         }
 
         when {
@@ -748,11 +867,11 @@ private fun AiSheet(vm: DhakaFlixViewModel) {
             }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Gemini.Model.entries.forEach { m ->
+                DhakaFlixAi.Model.entries.forEach { m ->
                     FilterChip(
                         selected = vm.aiModel == m,
                         onClick = { vm.aiModel = m },
-                        label = { Text(m.short) },
+                        label = { Text(m.label) },
                     )
                 }
             }

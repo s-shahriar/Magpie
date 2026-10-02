@@ -51,15 +51,20 @@ object DhakaFlix {
     suspend fun folder(url: String): Result<DfFolder> =
         withContext(Dispatchers.IO) { runCatching { dhakaflixFolder(url) } }
 
-    /** Queue a file. False when the same file is already on its way. */
-    fun download(url: String, name: String, size: Long?, category: String): Boolean {
+    enum class Queued { STARTED, WAITING, DUPLICATE }
+
+    /** Queue a file, and say whether it starts now, waits, or was already there. */
+    fun download(url: String, name: String, size: Long?, category: String): Queued {
         // The same file can be reached from search ("(" kept) and from its
         // folder listing ("%28"), so compare decoded.
         val same = decoded(url)
         if (DownloadEngine.jobs.value.any {
                 it.source == SOURCE && it.status != DownloadStatus.COMPLETED && decoded(it.videoUrl) == same
             }
-        ) return false
+        ) return Queued.DUPLICATE
+        val busy = DownloadEngine.jobs.value.count {
+            it.source == SOURCE && (it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.QUEUED)
+        }
         DownloadEngine.enqueue(
             sourceUrl = url,
             source = SOURCE,
@@ -73,8 +78,11 @@ object DhakaFlix {
             mime = mimeFor(name),
             folder = FOLDER,
         )
-        return true
+        return if (busy >= LAN_SLOTS) Queued.WAITING else Queued.STARTED
     }
+
+    /** Matches the engine's cap for this source. */
+    private const val LAN_SLOTS = 4
 
     private fun decoded(url: String) =
         runCatching { URLDecoder.decode(url.replace("+", "%2B"), "UTF-8") }.getOrDefault(url)
@@ -110,6 +118,24 @@ object DhakaFlix {
     }
 
     fun nameOf(url: String): String = pathOf(url).substringAfterLast('/')
+
+    /** A release folder's name taken apart for display. */
+    data class Titled(val title: String, val year: String?, val tags: List<String>)
+
+    /**
+     * "Crash Landing on You (TV Series 2019–2020) 1080p NF [Dual Audio]" →
+     * "Crash Landing on You", "2019–2020", [1080p, NF, Dual Audio]. A name
+     * that does not follow the pattern is kept whole.
+     */
+    fun describe(name: String): Titled {
+        val m = Regex("""^(.+?)\s*\(([^)]*)\)\s*(.*)$""").find(name) ?: return Titled(name, null, emptyList())
+        val (title, inside, rest) = m.destructured
+        val year = Regex("""\d{4}(?:\s*[–-]\s*\d{4})?""").find(inside)?.value
+            ?: return Titled(name, null, emptyList())
+        val bracketed = Regex("""\[([^\]]+)]""").findAll(rest).map { it.groupValues[1].trim() }.toList()
+        val loose = rest.replace(Regex("""\[[^\]]*]"""), " ").split(Regex("""\s+""")).filter { it.isNotBlank() }
+        return Titled(title.trim(), year, (loose + bracketed).filter { it.length <= 18 }.distinct().take(4))
+    }
 
     // ---- errors --------------------------------------------------------
 
@@ -211,9 +237,14 @@ object DhakaFlix {
         }
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        // Sharp enough for the folder header's large poster; RGB_565 halves
+        // the memory, and a poster has no alpha to lose.
         var sample = 1
-        while (bounds.outWidth / (sample * 2) >= 180) sample *= 2
-        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        while (bounds.outWidth / (sample * 2) >= 360) sample *= 2
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+        }
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
     }
 

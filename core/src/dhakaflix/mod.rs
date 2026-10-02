@@ -118,7 +118,13 @@ pub fn search(category_id: &str, query: &str, year: Option<&str>) -> Result<DfSe
 }
 
 pub fn folder(url: &str) -> Result<DfFolder, DfError> {
-    let all = listing::fetch(url, Duration::from_secs(30))?;
+    let timeout = Duration::from_secs(30);
+    // The API gives sizes and dates; the page is the fallback for a server
+    // that does not answer it.
+    let all = match listing::fetch_api(url, timeout)? {
+        Some(items) if !items.is_empty() => items,
+        _ => listing::fetch(url, timeout)?,
+    };
     let poster = listing::pick_poster(&all);
     Ok(DfFolder { items: listing::media_only(all), poster })
 }
