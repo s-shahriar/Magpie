@@ -18,7 +18,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import com.syed.magpie.ui.MagpieApp
 import com.syed.magpie.ui.DhakaFlixViewModel
-import com.syed.magpie.ui.LiveMcqViewModel
 import com.syed.magpie.ui.MagpieViewModel
 import com.syed.magpie.ui.Module
 import com.syed.magpie.ui.StillVideoViewModel
@@ -28,7 +27,6 @@ import com.syed.magpie.ui.theme.MagpieTheme
 class MainActivity : ComponentActivity() {
     private val vm: MagpieViewModel by viewModels()
     private val still: StillVideoViewModel by viewModels()
-    private val livemcq: LiveMcqViewModel by viewModels()
     private val subtitles: SubtitleViewModel by viewModels()
     private val dhakaflix: DhakaFlixViewModel by viewModels()
 
@@ -51,7 +49,6 @@ class MainActivity : ComponentActivity() {
                     MagpieApp(
                         vm = vm,
                         still = still,
-                        livemcq = livemcq,
                         subtitles = subtitles,
                         dhakaflix = dhakaflix,
                     )

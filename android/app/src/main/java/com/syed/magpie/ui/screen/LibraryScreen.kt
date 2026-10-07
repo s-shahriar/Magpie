@@ -43,7 +43,6 @@ import com.syed.magpie.data.DhakaFlix
 import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadStatus
 import com.syed.magpie.data.formatBytes
-import com.syed.magpie.ui.LiveMcqViewModel
 import com.syed.magpie.ui.MagpieViewModel
 import com.syed.magpie.ui.Module
 import com.syed.magpie.ui.StillVideoViewModel
@@ -85,7 +84,6 @@ import androidx.compose.material.icons.filled.Subtitles
 fun LibraryScreen(
     vm: MagpieViewModel,
     still: StillVideoViewModel,
-    livemcq: LiveMcqViewModel,
     subtitles: SubtitleViewModel,
     onEditStill: (StillJob) -> Unit,
     onHints: (DownloadJob) -> Unit,
@@ -102,9 +100,6 @@ fun LibraryScreen(
             it.isDhakaFlix && (it.status == DownloadStatus.COMPLETED || it.status == DownloadStatus.FAILED)
         }
         Module.StillVideo -> stills.count { it.status == StillStatus.COMPLETED }
-        // Nothing to sweep: these rows are the files themselves, and each
-        // one is deleted deliberately.
-        Module.LiveMcq -> 0
         Module.Subtitles -> subs.count { it.status == SubtitleStatus.COMPLETED }
     }
 
@@ -177,7 +172,6 @@ fun LibraryScreen(
             Module.Downloader -> DownloadList(jobs.filterNot { it.isDhakaFlix }, vm)
             Module.DhakaFlix -> DhakaFlixLibrary(jobs.filter { it.isDhakaFlix }, vm, onHints)
             Module.StillVideo -> StillLibrary(stills, still, onOpen = vm::open, onEdit = onEditStill)
-            Module.LiveMcq -> LiveMcqLibrary(livemcq)
             Module.Subtitles -> SubtitleLibrary(subs, subtitles)
         }
     }

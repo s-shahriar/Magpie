@@ -24,7 +24,6 @@ import com.syed.magpie.ui.component.QualitySheet
 import com.syed.magpie.ui.screen.DhakaFlixScreen
 import com.syed.magpie.ui.screen.HomeScreen
 import com.syed.magpie.ui.screen.LibraryScreen
-import com.syed.magpie.ui.screen.LiveMcqScreen
 import com.syed.magpie.ui.screen.LoginScreen
 import com.syed.magpie.ui.screen.ModulesScreen
 import com.syed.magpie.ui.screen.StillVideoScreen
@@ -41,7 +40,6 @@ private enum class Tab(val label: String, val icon: ImageVector) {
 fun MagpieApp(
     vm: MagpieViewModel,
     still: StillVideoViewModel,
-    livemcq: LiveMcqViewModel,
     subtitles: SubtitleViewModel,
     dhakaflix: DhakaFlixViewModel,
 ) {
@@ -77,8 +75,6 @@ fun MagpieApp(
             login = null
             // Coming back from a successful sign-in, retry what was asked for.
             if (vm.link.isNotBlank()) vm.fetch()
-            // Clears the "signed out" state so the module shows its form again.
-            if (site == Cookies.Site.LIVEMCQ) livemcq.dismissError()
         }
         return
     }
@@ -95,11 +91,6 @@ fun MagpieApp(
                         onSignIn = { login = it },
                         onCapture = { captureOpen = true },
                         onBack = toHub,
-                    )
-                    Module.LiveMcq -> LiveMcqScreen(
-                        livemcq,
-                        onBack = toHub,
-                        onSignIn = { login = it },
                     )
                     Module.StillVideo -> StillVideoScreen(
                         still,
@@ -132,7 +123,6 @@ fun MagpieApp(
             Tab.Library -> LibraryScreen(
                 vm,
                 still,
-                livemcq,
                 subtitles,
                 onEditStill = {
                     still.edit(it)

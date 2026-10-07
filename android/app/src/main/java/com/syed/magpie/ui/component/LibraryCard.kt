@@ -51,7 +51,7 @@ fun LibraryCard(
     status: CardStatus,
     primary: @Composable () -> Unit,
     menu: List<CardAction>,
-    /** Where this module's files land; LiveMCQ's do not go to Magpie's folder. */
+    /** Where this module's files land. */
     savedIn: String = "Downloads/Magpie",
 ) {
     Surface(

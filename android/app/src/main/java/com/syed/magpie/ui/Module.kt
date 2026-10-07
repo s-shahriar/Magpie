@@ -4,7 +4,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -18,7 +17,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 enum class Module(val label: String, val blurb: String, val icon: ImageVector) {
     Downloader("Downloader", "Facebook & Drive", Icons.Default.Download),
     StillVideo("Still → Video", "A photo as a long story", Icons.Default.Movie),
-    LiveMcq("LiveMCQ", "Favourites as JSON", Icons.Default.Star),
     Subtitles("Subtitles", "Bengali hints in .srt", Icons.Default.Subtitles),
     DhakaFlix("DhakaFlix", "Films & series on the LAN", Icons.Default.LiveTv),
 }
