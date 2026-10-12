@@ -219,7 +219,7 @@ class DhakaFlixViewModel(app: Application) : AndroidViewModel(app) {
 
     var aiOpen by mutableStateOf(false)
         private set
-    var aiModel by mutableStateOf(DhakaFlixAi.Model.FLASH_35)
+    var aiModel by mutableStateOf(DhakaFlixAi.Model.FLASH_36)
     var ai by mutableStateOf<AiState>(AiState.Idle)
         private set
 

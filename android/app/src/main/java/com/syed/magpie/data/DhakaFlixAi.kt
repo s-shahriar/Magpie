@@ -35,7 +35,7 @@ object DhakaFlixAi {
      * subtitles happily. Checked 2026-10-02 against a free key.
      */
     enum class Model(val id: String, val label: String) {
-        FLASH_35("gemini-3.5-flash", "3.5 Flash"),
+        FLASH_36("gemini-3.6-flash", "3.6 Flash"),
         FLASH_25("gemini-2.5-flash", "2.5 Flash · live search"),
     }
 
