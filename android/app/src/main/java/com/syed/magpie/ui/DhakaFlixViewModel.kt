@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.syed.magpie.data.DhakaFlix
 import com.syed.magpie.data.DhakaFlixAi
 import com.syed.magpie.data.DownloadEngine
+import com.syed.magpie.data.Episodes
 import com.syed.magpie.data.SubtitlePrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -203,7 +204,12 @@ class DhakaFlixViewModel(app: Application) : AndroidViewModel(app) {
     var viewRequest by mutableIntStateOf(0)
         private set
 
-    fun download(item: DfItem, categoryName: String = category.name) {
+    /**
+     * [folder] is the listing the item was picked from, when it came out of
+     * one: kept so "Download next episode" needs no second request.
+     */
+    fun download(item: DfItem, categoryName: String = category.name, folder: FolderPage? = null) {
+        folder?.folder?.let { Episodes.remember(folder.url, it.items) }
         // A download that starts at once needs no message: the strip at the
         // bottom appears with it. Only waiting or a duplicate is news.
         snack = when (DhakaFlix.download(item.url, item.name, item.sizeBytes?.toLong(), categoryName)) {

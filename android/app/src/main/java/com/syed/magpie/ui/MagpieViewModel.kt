@@ -16,6 +16,7 @@ import androidx.core.net.toUri
 import com.syed.magpie.data.DownloadEngine
 import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadProgress
+import com.syed.magpie.data.Episodes
 import com.syed.magpie.data.UpdateInfo
 import com.syed.magpie.data.UpdateService
 import com.syed.magpie.data.safeFileName
@@ -108,7 +109,8 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
      * private browser window. Whatever cookies exist are sent, and sign-in is
      * only offered when the extractor reports it is actually needed.
      */
-    fun fetch() {
+    fun fetch(auto: Boolean = false) {
+        autoStart = auto
         val url = link.trim()
         if (url.isEmpty()) return
         val site = Cookies.Site.of(Catalog.serviceFor(url))
@@ -127,6 +129,10 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
                             "This video is only offered in a format Android " +
                                 "cannot merge with its audio track.",
                         )
+                        return@onSuccess
+                    }
+                    if (autoStart) {
+                        startBest(it)
                         return@onSuccess
                     }
                     probe = ProbeState.Ready(it)
@@ -242,8 +248,32 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
             )
             return
         }
+        if (autoStart) {
+            startBest(info)
+            return
+        }
         chooser = info
         probe = ProbeState.Ready(info)
+    }
+
+    /**
+     * Set by a link shared in from another app: the download starts at the
+     * best quality on offer, with no picker. Survives a sign-in or a capture
+     * in between, and is spent by the download it starts.
+     */
+    var autoStart by mutableStateOf(false)
+        private set
+
+    private fun startBest(info: MediaInfo) {
+        autoStart = false
+        val best = Catalog.usableVideo(info).maxWithOrNull(
+            compareBy<Rendition>({ it.height?.toInt() ?: 0 }, { it.approxBytes ?: 0u }, { it.bitrate }),
+        ) ?: return
+        start(info, best)
+        android.widget.Toast.makeText(
+            getApplication(), "Downloading ${info.title} · ${best.label}", android.widget.Toast.LENGTH_SHORT,
+        ).show()
+        showLibrary()
     }
 
     /** Title scraped from the capture page, when there is one. */
@@ -276,6 +306,20 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         DownloadEngine.cancel(job.id)
+    }
+
+    /** DhakaFlix: queue the episode after [job]'s, and say what happened. */
+    fun nextEpisode(job: DownloadJob) {
+        viewModelScope.launch {
+            val text = when (val r = Episodes.queueNext(job)) {
+                is Episodes.Next.Queued ->
+                    (if (r.waiting) "Queued: " else "Downloading: ") + r.name.substringBeforeLast('.')
+                is Episodes.Next.AllQueued -> "Already in the list, up to ${r.upTo.substringBeforeLast('.')}"
+                Episodes.Next.Last -> "That's the last episode on the server"
+                is Episodes.Next.Failed -> r.message
+            }
+            android.widget.Toast.makeText(getApplication(), text, android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     fun rename(job: DownloadJob, title: String) {

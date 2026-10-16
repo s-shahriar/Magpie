@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.PlaylistRemove
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -311,6 +312,7 @@ internal fun JobCard(
     onConfirmDelete: () -> Unit,
     onRename: () -> Unit,
     onHints: ((DownloadJob) -> Unit)? = null,
+    onNextEpisode: (() -> Unit)? = null,
 ) {
     val done = job.status == DownloadStatus.COMPLETED
     // MERGING / SAVING cannot be interrupted safely.
@@ -351,6 +353,10 @@ internal fun JobCard(
             }
         },
         menu = buildList {
+            // DhakaFlix only, and only for a file named like an episode.
+            if (onNextEpisode != null) {
+                add(CardAction("Download next episode", Icons.Default.SkipNext, onClick = onNextEpisode))
+            }
             if (done) {
                 add(CardAction("Share", Icons.Default.Share) { job.outputUri?.let { vm.share(it.toUri(), job.mime) } })
                 // A film or an .srt off DhakaFlix goes straight to Subtitles.

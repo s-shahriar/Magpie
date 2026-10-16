@@ -92,6 +92,7 @@ fn dhakaflix(args: &[String]) -> Result<()> {
                     item.size_bytes.map(|b| fmt_size(Some(b))).unwrap_or_default(),
                     item.label.as_deref().unwrap_or(""),
                 );
+                println!("      {}", item.url);
             }
             println!(
                 "\n{} result(s) in {:.1}s{}{}",

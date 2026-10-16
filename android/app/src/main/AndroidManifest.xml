@@ -64,6 +64,21 @@
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/octet-stream" />
             </intent-filter>
+            <!-- "Open with Magpie" on a Facebook or Drive link. Not verified
+                 links, so Android offers Magpie rather than opening it. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:scheme="http" />
+                <data android:host="facebook.com" />
+                <data android:host="www.facebook.com" />
+                <data android:host="m.facebook.com" />
+                <data android:host="web.facebook.com" />
+                <data android:host="fb.watch" />
+                <data android:host="drive.google.com" />
+            </intent-filter>
             <!-- A share carries no data URI, so it can't name schemes. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

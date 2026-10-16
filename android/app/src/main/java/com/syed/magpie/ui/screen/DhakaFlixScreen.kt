@@ -698,7 +698,7 @@ private fun FolderBrowser(page: FolderPage, vm: DhakaFlixViewModel, onBack: () -
                     item,
                     showPoster = false,
                     onOpen = { if (item.isFolder) vm.open(item) },
-                    onDownload = { vm.download(item, page.category) },
+                    onDownload = { vm.download(item, page.category, page) },
                     onCopied = { vm.snack = com.syed.magpie.ui.Snack("Link copied") },
                 )
             }

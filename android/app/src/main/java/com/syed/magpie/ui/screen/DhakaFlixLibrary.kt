@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.syed.magpie.data.DhakaFlix
 import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadStatus
+import com.syed.magpie.data.Episodes
 import com.syed.magpie.ui.MagpieViewModel
 import com.syed.magpie.ui.component.DialogAction
 import com.syed.magpie.ui.component.MagpieDialog
@@ -132,6 +133,9 @@ internal fun DhakaFlixLibrary(
                 onConfirmDelete = { confirming = job },
                 onRename = { renaming = job },
                 onHints = onHints,
+                onNextEpisode = if (Episodes.isEpisode(DhakaFlix.nameOf(job.videoUrl))) {
+                    { vm.nextEpisode(job) }
+                } else null,
             )
         }
     }

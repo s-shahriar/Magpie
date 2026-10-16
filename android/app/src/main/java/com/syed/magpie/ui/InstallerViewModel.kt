@@ -60,7 +60,11 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { app.startActivity(intent) }
     }
 
-    fun pick(uri: Uri, fileName: String) {
+    /**
+     * [autoInstall]: opened from a file manager, so go straight on with the
+     * splits picked for this phone. Android's own sheet still asks.
+     */
+    fun pick(uri: Uri, fileName: String, autoInstall: Boolean = false) {
         job?.cancel()
         release()
         state = State.Reading
@@ -75,6 +79,8 @@ class InstallerViewModel(app: Application) : AndroidViewModel(app) {
                 bundle = b
                 chosen = b.splits.filter { it.suggested || it.required }.map { it.entry }.toSet()
                 state = State.Ready(b, installed)
+                refreshAllowed()
+                if (autoInstall && allowed) install()
             }.onFailure {
                 state = State.Failed(it.message ?: "Could not read $fileName", null)
             }

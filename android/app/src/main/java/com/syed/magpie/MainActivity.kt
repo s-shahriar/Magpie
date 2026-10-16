@@ -80,7 +80,17 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (intent.action == Intent.ACTION_VIEW) {
-            intent.data?.let(::openPackage)
+            val data = intent.data
+            when {
+                data == null -> Unit
+                // "Open with Magpie" on a Facebook or Drive link.
+                data.scheme == "http" || data.scheme == "https" -> {
+                    vm.link = data.toString()
+                    vm.openModule(Module.Downloader)
+                    vm.fetch(auto = true)
+                }
+                else -> openPackage(data)
+            }
             // Consumed, so a rotation doesn't re-read the file.
             intent.action = null
             return
@@ -126,7 +136,7 @@ class MainActivity : ComponentActivity() {
         if (!url.isNullOrEmpty()) {
             vm.link = url
             vm.openModule(Module.Downloader)
-            vm.fetch()
+            vm.fetch(auto = true)
         }
     }
 
@@ -136,7 +146,7 @@ class MainActivity : ComponentActivity() {
             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
                 ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
         }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "package.apk"
-        installer.pick(uri, name)
+        installer.pick(uri, name, autoInstall = true)
         vm.openModule(Module.Installer)
     }
 

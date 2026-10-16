@@ -56,6 +56,8 @@ object DownloadEngine {
         store = DownloadStore(appContext)
         downloader = Downloader(appContext)
         _jobs.value = store.load()
+        Episodes.init(appContext)
+        Episodes.prune(_jobs.value)
         sweepOrphans()
         // Jobs still waiting their turn when the process died carry on.
         pump()
@@ -270,6 +272,8 @@ object DownloadEngine {
         val statusChanged = next.size != previous.size ||
             next.any { previous[it.id] != it.status }
         store.save(next, force = statusChanged)
+        // A row left: drop any kept episode listing nothing points at now.
+        if (next.size < previous.size) Episodes.prune(next)
         syncService()
     }
 

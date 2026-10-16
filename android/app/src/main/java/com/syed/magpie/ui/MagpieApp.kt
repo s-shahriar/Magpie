@@ -59,6 +59,16 @@ fun MagpieApp(
 
     val capturing = (vm.probe as? ProbeState.NeedsCapture)?.url
     var captureOpen by remember { mutableStateOf(false) }
+    // A shared link that needs the player watched opens it straight away,
+    // and a shared private one goes to sign-in, so neither waits on a tap.
+    LaunchedEffect(vm.probe) {
+        if (!vm.autoStart) return@LaunchedEffect
+        when (val p = vm.probe) {
+            is ProbeState.NeedsCapture -> captureOpen = true
+            is ProbeState.NeedsLogin -> login = p.site
+            else -> Unit
+        }
+    }
     if (captureOpen && capturing != null) {
         com.syed.magpie.ui.screen.CaptureScreen(
             postUrl = capturing,
@@ -76,7 +86,7 @@ fun MagpieApp(
         LoginScreen(site) {
             login = null
             // Coming back from a successful sign-in, retry what was asked for.
-            if (vm.link.isNotBlank()) vm.fetch()
+            if (vm.link.isNotBlank()) vm.fetch(auto = vm.autoStart)
         }
         return
     }
