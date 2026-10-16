@@ -23,6 +23,7 @@ import com.syed.magpie.data.Cookies
 import com.syed.magpie.ui.component.QualitySheet
 import com.syed.magpie.ui.screen.DhakaFlixScreen
 import com.syed.magpie.ui.screen.HomeScreen
+import com.syed.magpie.ui.screen.InstallerScreen
 import com.syed.magpie.ui.screen.LibraryScreen
 import com.syed.magpie.ui.screen.LoginScreen
 import com.syed.magpie.ui.screen.ModulesScreen
@@ -42,6 +43,7 @@ fun MagpieApp(
     still: StillVideoViewModel,
     subtitles: SubtitleViewModel,
     dhakaflix: DhakaFlixViewModel,
+    installer: InstallerViewModel,
 ) {
     var tab by remember { mutableStateOf(Tab.Modules) }
     var login by remember { mutableStateOf<Cookies.Site?>(null) }
@@ -109,6 +111,7 @@ fun MagpieApp(
                             tab = Tab.Library
                         },
                     )
+                    Module.Installer -> InstallerScreen(installer, onBack = toHub)
                     Module.Subtitles -> SubtitleScreen(
                         subtitles,
                         onBack = toHub,

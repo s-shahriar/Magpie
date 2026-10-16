@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,6 +19,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import com.syed.magpie.ui.MagpieApp
 import com.syed.magpie.ui.DhakaFlixViewModel
+import com.syed.magpie.ui.InstallerViewModel
 import com.syed.magpie.ui.MagpieViewModel
 import com.syed.magpie.ui.Module
 import com.syed.magpie.ui.StillVideoViewModel
@@ -29,6 +31,7 @@ class MainActivity : ComponentActivity() {
     private val still: StillVideoViewModel by viewModels()
     private val subtitles: SubtitleViewModel by viewModels()
     private val dhakaflix: DhakaFlixViewModel by viewModels()
+    private val installer: InstallerViewModel by viewModels()
 
     /**
      * Android 13 stopped granting POST_NOTIFICATIONS with the manifest alone.
@@ -51,6 +54,7 @@ class MainActivity : ComponentActivity() {
                         still = still,
                         subtitles = subtitles,
                         dhakaflix = dhakaflix,
+                        installer = installer,
                     )
                 }
             }
@@ -73,6 +77,12 @@ class MainActivity : ComponentActivity() {
         if (intent == null) return
         if (intent.action == Intent.ACTION_SEND) {
             handleShare(intent)
+            return
+        }
+        if (intent.action == Intent.ACTION_VIEW) {
+            intent.data?.let(::openPackage)
+            // Consumed, so a rotation doesn't re-read the file.
+            intent.action = null
             return
         }
         // Arrived from a notification: land on the queue, and pick a failed
@@ -98,6 +108,10 @@ class MainActivity : ComponentActivity() {
      * sharing a photo opens it in Still → Video.
      */
     private fun handleShare(intent: Intent) {
+        if (intent.type?.startsWith("application/") == true) {
+            IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)?.let(::openPackage)
+            return
+        }
         if (intent.type?.startsWith("image/") == true) {
             val photo = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
             if (photo != null) {
@@ -114,6 +128,16 @@ class MainActivity : ComponentActivity() {
             vm.openModule(Module.Downloader)
             vm.fetch()
         }
+    }
+
+    /** A package opened or shared from a file manager goes to the Installer. */
+    private fun openPackage(uri: Uri) {
+        val name = runCatching {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "package.apk"
+        installer.pick(uri, name)
+        vm.openModule(Module.Installer)
     }
 
     companion object {

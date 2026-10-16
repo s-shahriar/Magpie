@@ -101,6 +101,7 @@ fun LibraryScreen(
         }
         Module.StillVideo -> stills.count { it.status == StillStatus.COMPLETED }
         Module.Subtitles -> subs.count { it.status == SubtitleStatus.COMPLETED }
+        Module.Installer -> 0
     }
 
     if (clearing) {
@@ -173,6 +174,7 @@ fun LibraryScreen(
             Module.DhakaFlix -> DhakaFlixLibrary(jobs.filter { it.isDhakaFlix }, vm, onHints)
             Module.StillVideo -> StillLibrary(stills, still, onOpen = vm::open, onEdit = onEditStill)
             Module.Subtitles -> SubtitleLibrary(subs, subtitles)
+            Module.Installer -> Unit
         }
     }
 }
@@ -198,7 +200,7 @@ private fun ModuleSwitcher(current: Module, onSelect: (Module) -> Unit) {
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Module.entries.forEach { m ->
+            Module.entries.filter { it.hasLibrary }.forEach { m ->
                 ModuleTab(m, active = m == current) { onSelect(m) }
             }
         }

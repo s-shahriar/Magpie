@@ -89,8 +89,8 @@ android {
         applicationId = "com.syed.magpie"
         minSdk = 31
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.6.1"
+        versionCode = 9
+        versionName = "0.7.0"
         ndk { abiFilters += "arm64-v8a" }
     }
 

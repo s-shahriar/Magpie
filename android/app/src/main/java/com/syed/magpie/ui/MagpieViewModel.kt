@@ -83,7 +83,7 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
     /** Opens a module; its library becomes the one the Library tab shows. */
     fun enterModule(m: Module) {
         module = m
-        libraryModule = m
+        if (m.hasLibrary) libraryModule = m
     }
 
     fun openModule(m: Module) {
