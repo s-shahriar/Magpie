@@ -9,9 +9,11 @@ pub mod dhakaflix;
 pub mod extract;
 pub mod http;
 pub mod model;
+pub mod youtube;
 
 pub use dhakaflix::{DfCategory, DfError, DfFolder, DfItem, DfSearch};
-pub use model::{MagpieError, MediaInfo, Rendition, StreamFacts};
+pub use model::{MagpieError, MediaInfo, Rendition, StreamFacts, SubTrack};
+pub use youtube::{YtEntry, YtFailure, YtLink, YtPick, YtPlaylist, YtPrefs};
 
 uniffi::setup_scaffolding!();
 
@@ -24,7 +26,8 @@ pub fn probe(url: String, cookie: String) -> Result<MediaInfo, MagpieError> {
     extract::probe(url.trim(), &cookie)
 }
 
-/// "facebook" | "gdrive" | null — lets the UI offer the right login before probing.
+/// "facebook" | "gdrive" | "youtube" | null — lets the UI offer the right
+/// login before probing.
 #[uniffi::export]
 pub fn service_for(url: String) -> Option<String> {
     extract::service_for(url.trim()).map(|s| s.to_string())
@@ -63,6 +66,54 @@ pub fn dhakaflix_folder(url: String) -> Result<DfFolder, DfError> {
 #[uniffi::export]
 pub fn dhakaflix_poster(folder_url: String) -> Option<String> {
     dhakaflix::poster(&folder_url)
+}
+
+/// What a YouTube link names: a video, a list, or a video inside a list.
+#[uniffi::export]
+pub fn youtube_link(url: String) -> Option<YtLink> {
+    youtube::link(url.trim())
+}
+
+/// Renditions from `yt-dlp -J <video>` output.
+#[uniffi::export]
+pub fn youtube_media(json: String) -> Result<MediaInfo, MagpieError> {
+    youtube::media(&json)
+}
+
+/// Entries from `yt-dlp -J --flat-playlist <list>` output.
+#[uniffi::export]
+pub fn youtube_playlist(json: String) -> Result<YtPlaylist, MagpieError> {
+    youtube::playlist(&json)
+}
+
+/// The video and audio a quality preset lands on.
+#[uniffi::export]
+pub fn youtube_pick(info: MediaInfo, prefs: YtPrefs) -> Option<YtPick> {
+    youtube::pick(&info, &prefs)
+}
+
+/// The audio track to go with `video`, or to save alone when it is null.
+#[uniffi::export]
+pub fn youtube_audio_for(info: MediaInfo, video: Option<Rendition>, prefs: YtPrefs) -> Option<Rendition> {
+    youtube::audio_for(&info, video.as_ref(), &prefs)
+}
+
+/// What went wrong, from yt-dlp's stderr.
+#[uniffi::export]
+pub fn youtube_failure(stderr: String) -> YtFailure {
+    youtube::failure(&stderr)
+}
+
+/// "H.264", "VP9", "Opus"… for a rendition's `codec`.
+#[uniffi::export]
+pub fn codec_label(codec: String) -> String {
+    youtube::codec_label(&codec)
+}
+
+/// YouTube captions (json3 or WebVTT) as SubRip, or null when there are none.
+#[uniffi::export]
+pub fn captions_to_srt(body: String, ext: String) -> Option<String> {
+    youtube::captions_to_srt(&body, &ext)
 }
 
 /// Version string, shown in the app's About row.

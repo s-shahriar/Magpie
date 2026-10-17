@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.syed.magpie.data.DhakaFlix
 import com.syed.magpie.data.DownloadJob
 import com.syed.magpie.data.DownloadStatus
+import com.syed.magpie.data.YouTube
 import com.syed.magpie.data.formatBytes
 import com.syed.magpie.ui.MagpieViewModel
 import com.syed.magpie.ui.Module
@@ -264,7 +265,7 @@ private fun DownloadList(jobs: List<DownloadJob>, vm: MagpieViewModel) {
         MagpieDialog(
             title = "Delete this video?",
             subject = job.title,
-            message = "It will be removed from Downloads/Magpie. This cannot be undone.",
+            message = "It will be removed from Downloads/${job.folder}. This cannot be undone.",
             primary = DialogAction("Delete video", destructive = true) {
                 vm.deleteWithFile(job)
                 confirming = null
@@ -323,16 +324,18 @@ internal fun JobCard(
             when (job.source) {
                 "facebook" -> "Facebook"
                 DhakaFlix.SOURCE -> "DhakaFlix"
+                YouTube.SOURCE -> "YouTube"
                 else -> "Drive"
             },
             job.quality,
             job.totalBytes?.takeIf { done }?.let(::formatBytes),
         ).joinToString(" · "),
         thumb = Thumb(
-            video = job.outputUri?.takeIf { done }?.toUri(),
+            video = job.outputUri?.takeIf { done && job.mime.startsWith("video/") }?.toUri(),
             icon = Icons.Default.Download,
+            web = job.thumbnail,
         ),
-        savedIn = if (job.isDhakaFlix) "Downloads/${DhakaFlix.FOLDER}" else "Downloads/Magpie",
+        savedIn = "Downloads/${job.folder}",
         status = if (done) CardStatus.Saved
         else CardStatus.Working(job.fraction, statusLine(job), failed = job.status == DownloadStatus.FAILED),
         primary = {

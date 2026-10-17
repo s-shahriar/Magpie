@@ -19,12 +19,18 @@ import com.syed.magpie.data.DownloadProgress
 import com.syed.magpie.data.Episodes
 import com.syed.magpie.data.UpdateInfo
 import com.syed.magpie.data.UpdateService
+import com.syed.magpie.data.YouTube
+import com.syed.magpie.data.YouTubeException
+import com.syed.magpie.data.YouTubePrefs
 import com.syed.magpie.data.safeFileName
 import com.syed.magpie.data.selfContained
 import uniffi.magpie_core.Rendition
 import kotlinx.coroutines.launch
 import uniffi.magpie_core.MagpieException
 import uniffi.magpie_core.MediaInfo
+import uniffi.magpie_core.SubTrack
+import uniffi.magpie_core.YtPlaylist
+import uniffi.magpie_core.youtubeLink
 import java.io.File
 
 /** Where the link box is in its lifecycle. */
@@ -35,6 +41,8 @@ sealed interface ProbeState {
     data class NeedsLogin(val site: Cookies.Site) : ProbeState
     /** Facebook no longer ships the manifest; the player has to be watched. */
     data class NeedsCapture(val url: String) : ProbeState
+    /** A YouTube playlist or channel, to pick entries from. */
+    data class Listed(val list: YtPlaylist) : ProbeState
     data class Failed(val message: String) : ProbeState
 }
 
@@ -54,6 +62,18 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
     var probe by mutableStateOf<ProbeState>(ProbeState.Idle)
         private set
     var chooser by mutableStateOf<MediaInfo?>(null)
+
+    /** The YouTube playlist being picked from, while its sheet is open. */
+    var playlist by mutableStateOf<YtPlaylist?>(null)
+
+    /**
+     * What a slow probe is doing, when it is not just reading the link:
+     * YouTube's first run unpacks Python and updates yt-dlp.
+     */
+    var workingNote by mutableStateOf<String?>(null)
+        private set
+
+    val youtubePrefs: YouTubePrefs get() = YouTube.prefs()
 
     /** The queue lives in the engine so it survives this ViewModel. */
     val jobs = DownloadEngine.jobs
@@ -98,6 +118,33 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         DownloadEngine.init(app)
     }
 
+    // ---- yt-dlp --------------------------------------------------------
+
+    var ytdlpVersion by mutableStateOf<String?>(null)
+        private set
+    var ytdlpUpdating by mutableStateOf(false)
+        private set
+    var ytdlpMessage by mutableStateOf<String?>(null)
+        private set
+
+    fun refreshYtdlpVersion() { ytdlpVersion = YouTube.version() }
+
+    fun updateYtdlp() {
+        if (ytdlpUpdating) return
+        ytdlpUpdating = true
+        ytdlpMessage = null
+        viewModelScope.launch {
+            val before = YouTube.version()
+            YouTube.update()
+                .onSuccess {
+                    ytdlpVersion = it
+                    ytdlpMessage = if (it == before) "Already the newest" else "Updated to $it"
+                }
+                .onFailure { ytdlpMessage = it.message ?: "Update failed" }
+            ytdlpUpdating = false
+        }
+    }
+
     // ---- link handling -------------------------------------------------
 
     /**
@@ -113,6 +160,10 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         autoStart = auto
         val url = link.trim()
         if (url.isEmpty()) return
+        if (YouTube.isLink(url)) {
+            fetchYouTube(url)
+            return
+        }
         val site = Cookies.Site.of(Catalog.serviceFor(url))
         if (site == null) {
             probe = ProbeState.Failed("That link is not supported yet.")
@@ -166,13 +217,80 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * YouTube goes through yt-dlp rather than the core's probe. A shared link
+     * downloads at the quality set in Settings, or opens the picker when that
+     * is "Ask"; a playlist always opens its list, since which entries to take
+     * is not something a default can decide.
+     */
+    private fun fetchYouTube(url: String) {
+        val target = youtubeLink(url) ?: return
+        probe = ProbeState.Working
+        workingNote = null
+        val note: (String) -> Unit = { workingNote = it }
+        viewModelScope.launch {
+            try {
+                if (target.videoUrl == null) {
+                    autoStart = false
+                    val list = YouTube.playlist(url, note)
+                    playlist = list
+                    probe = ProbeState.Listed(list)
+                    return@launch
+                }
+                val info = YouTube.video(url, note)
+                val preset = youtubePrefs.sharedQuality
+                if (autoStart && preset != YouTubePrefs.Quality.ASK) {
+                    autoStart = false
+                    startYouTubePreset(info, preset)
+                    return@launch
+                }
+                autoStart = false
+                probe = ProbeState.Ready(info)
+                chooser = info
+            } catch (e: YouTubeException) {
+                val f = e.failure
+                probe = when (f.kind) {
+                    "signin" -> if (Cookies.isSignedIn(Cookies.Site.YOUTUBE)) {
+                        ProbeState.Failed("${f.message}. The signed-in account cannot open it either.")
+                    } else {
+                        ProbeState.NeedsLogin(Cookies.Site.YOUTUBE)
+                    }
+                    "network" -> ProbeState.Failed("Network problem — ${f.message}")
+                    "outdated" -> ProbeState.Failed(
+                        "yt-dlp could not read this one: ${f.message}. " +
+                            "Settings → YouTube → Update yt-dlp may fix it.",
+                    )
+                    else -> ProbeState.Failed(f.message)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                probe = ProbeState.Failed(e.message ?: "Could not read that link.")
+            } finally {
+                workingNote = null
+            }
+        }
+    }
+
     fun clearLink() {
         link = ""
         probe = ProbeState.Idle
         chooser = null
+        playlist = null
     }
 
     fun dismissChooser() { chooser = null }
+
+    fun dismissPlaylist() { playlist = null }
+
+    /** From the picker of a video that sits inside a list: show the list. */
+    fun openPlaylist(info: MediaInfo) {
+        val url = info.playlistUrl ?: return
+        chooser = null
+        link = url
+        autoStart = false
+        fetchYouTube(url)
+    }
 
     // ---- downloads -----------------------------------------------------
 
@@ -200,6 +318,65 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         )
         link = ""
         probe = ProbeState.Idle
+    }
+
+    /**
+     * A YouTube choice from its picker. [video] is null for audio only;
+     * [audio] is null when the video carries its own sound.
+     */
+    fun startYouTube(info: MediaInfo, video: Rendition?, audio: Rendition?, name: String, subtitle: SubTrack?) {
+        chooser = null
+        val title = name.trim().ifEmpty { info.title }
+        DownloadEngine.enqueue(YouTube.job(info, video, audio, title, subtitle))
+        subtitle?.let { youtubePrefs.subtitleLang = it.lang }
+        link = ""
+        probe = ProbeState.Idle
+    }
+
+    private fun startYouTubePreset(info: MediaInfo, quality: YouTubePrefs.Quality) {
+        val pick = YouTube.pick(info, quality.preset)
+        if (pick == null) {
+            probe = ProbeState.Ready(info)
+            chooser = info
+            return
+        }
+        startYouTube(info, pick.video, pick.audio, info.title, null)
+        val label = pick.video?.label ?: pick.audio?.label.orEmpty()
+        android.widget.Toast.makeText(
+            getApplication(), "Downloading ${info.title} · $label", android.widget.Toast.LENGTH_SHORT,
+        ).show()
+        showLibrary()
+    }
+
+    /**
+     * Queues the chosen entries of a playlist. Each is looked up only when
+     * its turn comes, so a hundred-video course queues instantly and none of
+     * its links has expired by the time it starts.
+     */
+    fun queuePlaylist(
+        list: YtPlaylist,
+        ids: Set<String>,
+        quality: YouTubePrefs.Quality,
+        numbered: Boolean,
+        subtitleLang: String?,
+    ) {
+        val chosen = list.entries.filter { it.id in ids && it.available }
+        if (chosen.isEmpty()) return
+        val width = list.entries.size.toString().length.coerceAtLeast(2)
+        val jobs = chosen.map { e ->
+            val title = if (numbered) "${e.index.toString().padStart(width, '0')} - ${e.title}" else e.title
+            YouTube.lazyJob(e.url, e.id, title, quality, list.title, subtitleLang)
+        }
+        DownloadEngine.enqueueAll(jobs)
+        playlist = null
+        link = ""
+        probe = ProbeState.Idle
+        android.widget.Toast.makeText(
+            getApplication(),
+            "Queued ${jobs.size} from ${list.title}",
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+        showLibrary()
     }
 
     /** Turn streams seen on the wire into a normal quality choice. */
@@ -300,7 +477,7 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
      * the file is gone from Downloads.
      */
     fun deleteWithFile(job: DownloadJob) {
-        job.outputUri?.let { raw ->
+        listOfNotNull(job.outputUri, job.subtitleUri).forEach { raw ->
             runCatching {
                 getApplication<Application>().contentResolver.delete(raw.toUri(), null, null)
             }

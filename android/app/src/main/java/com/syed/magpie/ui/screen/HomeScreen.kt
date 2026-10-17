@@ -10,7 +10,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Login
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,7 +51,7 @@ fun HomeScreen(
             value = vm.link,
             onValueChange = { vm.link = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Paste a Facebook or Drive link") },
+            placeholder = { Text("Paste a YouTube, Facebook or Drive link") },
             singleLine = false,
             maxLines = 3,
             shape = MaterialTheme.shapes.medium,
@@ -100,6 +102,17 @@ fun HomeScreen(
             }
         }
 
+        vm.workingNote?.takeIf { vm.probe is ProbeState.Working }?.let {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
         Spacer(Modifier.height(18.dp))
 
         when (val s = vm.probe) {
@@ -118,6 +131,25 @@ fun HomeScreen(
                 actionLabel = "Open video",
                 onAction = onCapture,
             )
+            // Closing the playlist sheet leaves a way back to it.
+            is ProbeState.Listed -> if (vm.playlist == null) {
+                Notice(
+                    title = s.list.title,
+                    body = "${s.list.entries.size} videos" + (s.list.uploader?.let { " by $it" } ?: ""),
+                    actionLabel = "Choose videos",
+                    onAction = { vm.playlist = s.list },
+                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                )
+            }
+            is ProbeState.Ready -> if (vm.chooser == null) {
+                Notice(
+                    title = s.info.title,
+                    body = "Qualities are ready.",
+                    actionLabel = "Choose quality",
+                    onAction = { vm.chooser = s.info },
+                    icon = Icons.Default.HighQuality,
+                )
+            }
             is ProbeState.Failed -> Notice(
                 title = "Could not read that link",
                 body = s.message,
@@ -130,7 +162,7 @@ fun HomeScreen(
 
         Spacer(Modifier.height(30.dp))
         Text(
-            "Works with view-only Drive files and private group posts you already have access to.",
+            "Works with YouTube videos, playlists and channels, view-only Drive files, and private group posts you already have access to.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -147,6 +179,7 @@ private fun Notice(
     actionLabel: String?,
     onAction: () -> Unit,
     error: Boolean = false,
+    icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Default.Login,
 ) {
     val accent = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Surface(
@@ -182,7 +215,7 @@ private fun Notice(
                             contentColor = MaterialTheme.colorScheme.onPrimary,
                         ),
                     ) {
-                        Icon(Icons.Default.Login, null, Modifier.size(18.dp))
+                        Icon(icon, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
                         Text(actionLabel)
                     }

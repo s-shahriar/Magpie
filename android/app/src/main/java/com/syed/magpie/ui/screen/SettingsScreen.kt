@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.syed.magpie.BuildConfig
 import com.syed.magpie.data.Cookies
+import com.syed.magpie.data.YouTubePrefs
 import com.syed.magpie.data.formatBytes
 import com.syed.magpie.ui.MagpieViewModel
 import com.syed.magpie.ui.SubtitleViewModel
@@ -72,6 +73,10 @@ fun SettingsScreen(
         ImportCookiesRow { refresh++ }
 
         Spacer(Modifier.height(22.dp))
+        SectionTitle("YouTube")
+        YouTubeCard(vm)
+
+        Spacer(Modifier.height(22.dp))
         SectionTitle("Gemini")
         GeminiKeyCard(subtitles)
 
@@ -114,7 +119,7 @@ private fun ImportCookiesRow(onImported: () -> Unit) {
                 ?: error("Could not read that file")
             val counts = Cookies.importNetscape(text)
             if (counts.isEmpty()) {
-                "No Facebook or Drive cookies in that file"
+                "No Facebook, Drive or YouTube cookies in that file"
             } else {
                 counts.entries.joinToString(", ") { "${it.key.label}: ${it.value}" }
             }
@@ -140,6 +145,106 @@ private fun ImportCookiesRow(onImported: () -> Unit) {
                 Spacer(Modifier.height(10.dp))
                 Text(it, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+/**
+ * What a shared YouTube link does, which codecs to lean towards, and the
+ * yt-dlp that reads YouTube — which updates itself daily, and here on demand
+ * when YouTube has changed something that same morning.
+ */
+@Composable
+private fun YouTubeCard(vm: MagpieViewModel) {
+    val prefs = vm.youtubePrefs
+    var shared by remember { mutableStateOf(prefs.sharedQuality) }
+    var codec by remember { mutableStateOf(prefs.codec) }
+    var lang by remember { mutableStateOf(prefs.audioLang) }
+    LaunchedEffect(Unit) { vm.refreshYtdlpVersion() }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            ChoiceRow(
+                title = "Shared links",
+                value = shared.label,
+                options = YouTubePrefs.Quality.entries.map { it.label to it },
+            ) { shared = it; prefs.sharedQuality = it }
+            Text(
+                "What “Open with Magpie” or a share from the YouTube app downloads. " +
+                    "Playlists always ask.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(14.dp))
+            ChoiceRow(
+                title = "Formats",
+                value = codec.label,
+                options = YouTubePrefs.Codec.entries.map { "${it.label} — ${it.blurb}" to it },
+            ) { codec = it; prefs.codec = it }
+            Text(
+                codec.blurb,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(14.dp))
+            ChoiceRow(
+                title = "Audio language",
+                value = AUDIO_LANGS.firstOrNull { it.first == lang }?.second ?: lang,
+                options = AUDIO_LANGS.map { it.second to it.first },
+            ) { lang = it; prefs.audioLang = it }
+            Text(
+                "For videos with dubbed tracks. Falls back to the original when a video has no such track.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(14.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("yt-dlp", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        vm.ytdlpVersion ?: "Set up on the first YouTube link",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (vm.ytdlpUpdating) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Action("Update") { vm.updateYtdlp() }
+                }
+            }
+            vm.ytdlpMessage?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+private val AUDIO_LANGS = listOf(
+    "" to "Original",
+    "en" to "English",
+    "bn" to "Bangla",
+    "hi" to "Hindi",
+    "ar" to "Arabic",
+    "es" to "Spanish",
+)
+
+/** A label, its current value, and a menu of the alternatives. */
+@Composable
+private fun <T> ChoiceRow(title: String, value: String, options: List<Pair<String, T>>, onChoose: (T) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+        Box {
+            TextButton(onClick = { open = true }) { Text(value) }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                options.forEach { (label, v) ->
+                    DropdownMenuItem(text = { Text(label) }, onClick = { open = false; onChoose(v) })
+                }
             }
         }
     }

@@ -14,6 +14,7 @@ magpie — resolve and download media you have access to
 USAGE:
     magpie probe <url> [--cookies <file>]
     magpie get   <url> [--cookies <file>] [--quality lowest|highest|<id>] [--out <file>]
+    magpie get   <youtube-url> [--quality best|smallest|audio|<height>|<id>] [--codec compat|small]
     magpie dhakaflix categories
     magpie dhakaflix search <query> [--category <id>] [--year <yyyy>]
     magpie dhakaflix ls <folder-url>
@@ -22,6 +23,10 @@ OPTIONS:
     --cookies <file>   Netscape cookies.txt (yt-dlp --cookies-from-browser chrome --cookies f)
     --quality <spec>   lowest (default), highest, or a rendition id from `probe`
     --out <file>       output path; default ./<title>.mp4
+    --codec <pref>     YouTube: compat (H.264 + AAC, default) or small (AV1/VP9 + Opus)
+
+YouTube links are read by yt-dlp (`yt-dlp` on PATH); a playlist or channel
+link lists its entries on `probe` and downloads every one on `get`.
 ";
 
 fn main() {
@@ -49,6 +54,10 @@ fn run() -> Result<()> {
     let quality = flag(&args, "--quality").unwrap_or_else(|| "lowest".into());
     let out = flag(&args, "--out");
 
+    if magpie_core::youtube::matches(&url) {
+        return youtube(&cmd, &url, cookies_path.as_deref(), &args, out);
+    }
+
     let cookie = match &cookies_path {
         Some(p) => cookie_header(Path::new(p), &url)?,
         None => String::new(),
@@ -64,6 +73,122 @@ fn run() -> Result<()> {
         }
         "get" => download(&info, &quality, out, &cookie),
         other => bail!("unknown command `{other}`\n\n{HELP}"),
+    }
+}
+
+/// Runs `yt-dlp -J` and returns its stdout; stderr is classified on failure.
+fn ytdlp(url: &str, cookies: Option<&str>, flat: bool) -> Result<String> {
+    let mut cmd = Command::new("yt-dlp");
+    cmd.args(["-J", "--no-warnings"]);
+    if magpie_core::youtube::link(url).is_some_and(|l| l.is_channel) {
+        cmd.args(["--playlist-end", &magpie_core::youtube::CHANNEL_LIMIT.to_string()]);
+    }
+    cmd.arg(if flat { "--yes-playlist" } else { "--no-playlist" });
+    if flat {
+        cmd.arg("--flat-playlist");
+    }
+    if let Some(c) = cookies {
+        cmd.args(["--cookies", c]);
+    }
+    let out = cmd.arg(url).output().context("yt-dlp not found — install it to read YouTube links")?;
+    if !out.status.success() {
+        let f = magpie_core::youtube::failure(&String::from_utf8_lossy(&out.stderr));
+        bail!("{} ({})", f.message, f.kind);
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn youtube(cmd: &str, url: &str, cookies: Option<&str>, args: &[String], out: Option<String>) -> Result<()> {
+    let core = |e: magpie_core::MagpieError| anyhow::anyhow!("{e}");
+    let link = magpie_core::youtube::link(url).context("not a YouTube video, playlist or channel link")?;
+    let prefs = magpie_core::YtPrefs {
+        quality: flag(args, "--quality").unwrap_or_else(|| "best".into()),
+        codec: flag(args, "--codec").unwrap_or_else(|| "compat".into()),
+        audio_lang: flag(args, "--lang"),
+    };
+
+    let Some(video_url) = link.video_url else {
+        let list_url = link.playlist_url.context("nothing to read in that link")?;
+        let list = magpie_core::youtube::playlist(&ytdlp(&list_url, cookies, true)?).map_err(core)?;
+        println!("{} — {} entries{}", list.title, list.entries.len(),
+            list.uploader.as_deref().map(|u| format!(" by {u}")).unwrap_or_default());
+        for e in &list.entries {
+            println!("  {:>3}{} {:<70} {}", e.index, if e.available { " " } else { "x" }, e.title, fmt_mmss(e.duration_secs));
+        }
+        if cmd == "get" {
+            for e in list.entries.iter().filter(|e| e.available) {
+                println!("\n[{}/{}] {}", e.index, list.entries.len(), e.title);
+                let info = magpie_core::youtube::media(&ytdlp(&e.url, cookies, false)?).map_err(core)?;
+                let name = format!("{:02} - {}", e.index, sanitize(&info.title));
+                if let Err(err) = youtube_get(&info, &prefs, Some(name)) {
+                    eprintln!("  skipped: {err:#}");
+                }
+            }
+        }
+        return Ok(());
+    };
+
+    let info = magpie_core::youtube::media(&ytdlp(&video_url, cookies, false)?).map_err(core)?;
+    match cmd {
+        "probe" => {
+            print_info(&info);
+            for s in &info.subtitles {
+                println!("  subtitles  {:<8} {}{}", s.lang, s.name, if s.auto { " (auto)" } else { "" });
+            }
+            if let Some(p) = link.playlist_url {
+                println!("\n  part of a playlist: magpie probe '{p}'");
+            }
+            Ok(())
+        }
+        "get" => youtube_get(&info, &prefs, out.map(|o| o.trim_end_matches(".mp4").to_string())),
+        other => bail!("unknown command `{other}`\n\n{HELP}"),
+    }
+}
+
+/// One video under a preset — or an exact format id from `probe`.
+fn youtube_get(info: &magpie_core::MediaInfo, prefs: &magpie_core::YtPrefs, stem: Option<String>) -> Result<()> {
+    let by_id = info.video.iter().chain(info.audio.iter()).find(|r| r.id == prefs.quality);
+    let pick = match by_id {
+        Some(r) if r.kind == "audio" => magpie_core::YtPick { video: None, audio: Some(r.clone()) },
+        Some(r) => magpie_core::YtPick {
+            video: Some(r.clone()),
+            audio: if r.kind == "muxed" { None } else { magpie_core::youtube::audio_for(info, Some(r), prefs) },
+        },
+        None => magpie_core::youtube::pick(info, prefs).context("no format matches that quality")?,
+    };
+    let stem = stem.unwrap_or_else(|| sanitize(&info.title));
+    match (&pick.video, &pick.audio) {
+        (None, Some(a)) => {
+            let ext = if a.mime.as_deref() == Some("audio/webm") { "webm" } else { "m4a" };
+            println!("audio : {} ({})", a.label, fmt_size(a.approx_bytes));
+            fetch(&a.url, &PathBuf::from(format!("{stem}.{ext}")), "")
+        }
+        (Some(v), None) => {
+            println!("video : {} ({})", v.label, fmt_size(v.approx_bytes));
+            fetch(&v.url, &PathBuf::from(format!("{stem}.mp4")), "")
+        }
+        (Some(v), Some(a)) => {
+            let target = PathBuf::from(format!("{stem}.mp4"));
+            println!("video : {} {} ({})", v.label, v.codec.as_deref().unwrap_or(""), fmt_size(v.approx_bytes));
+            println!("audio : {} ({})", a.label, fmt_size(a.approx_bytes));
+            let vt = target.with_extension("v.tmp");
+            let at = target.with_extension("a.tmp");
+            fetch(&v.url, &vt, "")?;
+            fetch(&a.url, &at, "")?;
+            mux(&vt, &at, &target)?;
+            let _ = std::fs::remove_file(&vt);
+            let _ = std::fs::remove_file(&at);
+            Ok(())
+        }
+        (None, None) => bail!("nothing to download"),
+    }
+}
+
+fn fmt_mmss(s: u64) -> String {
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
     }
 }
 

@@ -9,6 +9,11 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
         facebook::probe(url, cookie)
     } else if gdrive::matches(url) {
         gdrive::probe(url, cookie)
+    } else if crate::youtube::matches(url) {
+        // Read by yt-dlp, which the front end runs; see `crate::youtube`.
+        Err(MagpieError::Parse {
+            msg: "YouTube links are read through yt-dlp, not probed directly".into(),
+        })
     } else {
         Err(MagpieError::Unsupported { url: url.into() })
     }
@@ -20,6 +25,8 @@ pub fn service_for(url: &str) -> Option<&'static str> {
         Some("facebook")
     } else if gdrive::matches(url) {
         Some("gdrive")
+    } else if crate::youtube::matches(url) {
+        Some(crate::youtube::SOURCE)
     } else {
         None
     }

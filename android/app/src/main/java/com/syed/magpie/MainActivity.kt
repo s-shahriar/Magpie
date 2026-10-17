@@ -83,7 +83,7 @@ class MainActivity : ComponentActivity() {
             val data = intent.data
             when {
                 data == null -> Unit
-                // "Open with Magpie" on a Facebook or Drive link.
+                // "Open with Magpie" on a Facebook, Drive or YouTube link.
                 data.scheme == "http" || data.scheme == "https" -> {
                     vm.link = data.toString()
                     vm.openModule(Module.Downloader)
@@ -114,7 +114,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Sharing a link from Facebook or Drive drops it straight into the box;
+     * Sharing a link from YouTube, Facebook or Drive drops it straight into the box;
      * sharing a photo opens it in Still → Video.
      */
     private fun handleShare(intent: Intent) {

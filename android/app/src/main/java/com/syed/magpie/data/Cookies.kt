@@ -35,6 +35,18 @@ object Cookies {
             "https://drive.google.com/",
             "google.com",
         ),
+        // Only needed for age-restricted, members-only and private videos, or
+        // when YouTube asks this connection to prove it is not a bot. The
+        // Google sign-in is the same one Drive uses; `continue` lands on
+        // youtube.com so its own session cookies get set.
+        YOUTUBE(
+            "youtube",
+            "YouTube",
+            "https://accounts.google.com/ServiceLogin?service=youtube&continue=" +
+                "https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26next%3D%252F",
+            "https://www.youtube.com/",
+            "youtube.com",
+        ),
         ;
 
         companion object {
@@ -52,6 +64,7 @@ object Cookies {
         return when (site) {
             Site.FACEBOOK -> c.contains("c_user=")
             Site.GDRIVE -> c.contains("SID=") || c.contains("__Secure-1PSID=")
+            Site.YOUTUBE -> c.contains("LOGIN_INFO=") || c.contains("__Secure-3PSID=")
         }
     }
 
@@ -63,6 +76,23 @@ object Cookies {
     }
 
     fun flush() = CookieManager.getInstance().flush()
+
+    /**
+     * The jar's cookies for [site] as a Netscape `cookies.txt`, which is what
+     * yt-dlp reads. The WebView hands back names and values only, so every
+     * cookie is written for the whole domain, over HTTPS, with no expiry.
+     */
+    fun netscapeFor(site: Site): String? {
+        val header = headerFor(site).ifBlank { return null }
+        return buildString {
+            append("# Netscape HTTP Cookie File\n")
+            header.split(';').map { it.trim() }.filter { '=' in it }.forEach { pair ->
+                val name = pair.substringBefore('=')
+                val value = pair.substringAfter('=')
+                append(".${site.cookieDomain}\tTRUE\t/\tTRUE\t0\t$name\t$value\n")
+            }
+        }
+    }
 
     /**
      * Seeds the jar from a Netscape `cookies.txt`.

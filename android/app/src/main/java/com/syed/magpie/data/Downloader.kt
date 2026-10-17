@@ -59,6 +59,7 @@ class Downloader(private val context: Context) {
 
     suspend fun run(job: DownloadJob, onTick: (Tick) -> Unit): Uri = withContext(Dispatchers.IO) {
         val cookie = Cookies.Site.of(job.source)?.let { Cookies.headerFor(it) }.orEmpty()
+        val ua = job.userAgent ?: UA
         val needsAudio = job.audioUrl != null
 
         val videoFile = partFile(context, job.id, "v")
@@ -79,11 +80,16 @@ class Downloader(private val context: Context) {
         val chunkMap = File(videoFile.parentFile, videoFile.name + ".chunks")
         val alreadyWhole = !needsAudio && job.totalBytes != null && !chunkMap.exists() &&
             videoFile.exists() && videoFile.length() == job.totalBytes
+        // Subtitles first: a few kilobytes, and their URL expires with the
+        // streams', so fetching them after an hour-long video could miss.
+        val subFile = subtitleFile(context, job.id)
+        if (job.subtitleUrl != null && !subFile.exists()) fetchSubtitles(job, subFile, ua)
+
         if (!alreadyWhole) {
-            fetch(job.videoUrl, videoFile, cookie, "", videoShare, 0f, job, onTick)
+            fetch(job.videoUrl, videoFile, cookie, ua, "", videoShare, 0f, job, onTick)
         }
         if (needsAudio) {
-            fetch(job.audioUrl!!, audioFile, cookie, "", 0.1f, videoShare, job, onTick)
+            fetch(job.audioUrl!!, audioFile, cookie, ua, "", 0.1f, videoShare, job, onTick)
         }
 
         val uri: Uri
@@ -116,6 +122,36 @@ class Downloader(private val context: Context) {
     }
 
     /**
+     * Captions as an .srt, named to sit beside the video so players pick
+     * them up. Never fails the job: the video is what was asked for.
+     */
+    private fun fetchSubtitles(job: DownloadJob, target: File, ua: String) {
+        runCatching {
+            val conn = (URL(job.subtitleUrl).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15_000
+                readTimeout = 30_000
+                setRequestProperty("User-Agent", ua)
+            }
+            val body = try {
+                if (conn.responseCode !in 200..299) return
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                conn.disconnect()
+            }
+            uniffi.magpie_core.captionsToSrt(body, job.subtitleExt ?: "vtt")?.let { target.writeText(it) }
+        }
+    }
+
+    /** Publishes the .srt fetched for [job], if one was. Returns its URI. */
+    fun publishSubtitles(job: DownloadJob): Uri? {
+        val file = subtitleFile(context, job.id)
+        if (!file.exists() || job.subtitleLang == null) return null
+        return runCatching {
+            publish(file, job.copy(fileName = subtitleName(job.fileName, job.subtitleLang), mime = "application/x-subrip"))
+        }.getOrNull().also { file.delete() }
+    }
+
+    /**
      * Ranged, resumable GET. A dropped connection — or a pause — on a 300 MB
      * lecture must not mean starting over, so the partial file is kept and the
      * next attempt asks for the remainder.
@@ -124,6 +160,7 @@ class Downloader(private val context: Context) {
         url: String,
         target: File,
         cookie: String,
+        ua: String,
         stage: String,
         weight: Float,
         offset: Float,
@@ -133,14 +170,14 @@ class Downloader(private val context: Context) {
         // Several connections when the server allows it: a single response
         // from Drive is throttled to about playback speed regardless of the
         // link, so one stream is the bottleneck rather than the network.
-        val probe = SegmentedFetch.probe(url, cookie)
+        val probe = SegmentedFetch.probe(url, cookie, ua)
         if (SegmentedFetch.worthIt(probe)) {
             val size = probe.total!!
             val began = System.nanoTime()
             val window = RateWindow()
             val written = java.util.concurrent.atomic.AtomicLong(0)
             var lastAt = 0L
-            SegmentedFetch.fetch(url, target, cookie, size) { delta ->
+            SegmentedFetch.fetch(url, target, cookie, size, ua = ua) { delta ->
                 val now = written.addAndGet(delta)
                 val elapsed = System.nanoTime() - began
                 if (elapsed - lastAt >= REPORT_NANOS) {
@@ -155,13 +192,13 @@ class Downloader(private val context: Context) {
         }
 
         val have = if (target.exists()) target.length() else 0L
-        var conn = open(url, cookie, have)
+        var conn = open(url, cookie, ua, have)
 
         // A complete cached file asks for an unsatisfiable range; start over.
         if (conn.responseCode == 416) {
             conn.disconnect()
             target.delete()
-            conn = open(url, cookie, 0)
+            conn = open(url, cookie, ua, 0)
         }
         val resuming = conn.responseCode == HttpURLConnection.HTTP_PARTIAL
         val start = if (resuming) have else 0L
@@ -217,12 +254,12 @@ class Downloader(private val context: Context) {
         }
     }
 
-    private fun open(url: String, cookie: String, from: Long): HttpURLConnection =
+    private fun open(url: String, cookie: String, ua: String, from: Long): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000
             readTimeout = 60_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", UA)
+            setRequestProperty("User-Agent", ua)
             setRequestProperty("Accept", "*/*")
             if (cookie.isNotEmpty()) setRequestProperty("Cookie", cookie)
             if (from > 0) setRequestProperty("Range", "bytes=$from-")
@@ -231,9 +268,7 @@ class Downloader(private val context: Context) {
                 disconnect()
                 // 403 on a previously-good URL almost always means the signed
                 // CDN link has expired rather than that access was lost.
-                if (code == 403 || code == 410) {
-                    error("This link has expired — fetch the page again")
-                }
+                if (code == 403 || code == 410) throw LinkExpiredException()
                 error("Server returned HTTP $code")
             }
         }
@@ -420,8 +455,19 @@ class Downloader(private val context: Context) {
 
         fun partFile(context: Context, id: String, kind: String): File =
             File(partsDir(context), "dl-$id-$kind.part")
+
+        fun subtitleFile(context: Context, id: String): File =
+            File(partsDir(context), "dl-$id-s.srt")
     }
 }
+
+/**
+ * The CDN refused a URL that worked before: a signed link past its expiry,
+ * or — on YouTube — one issued to a different IP. Not an IOException: that
+ * would read as a dropped connection, and park a DhakaFlix job as paused.
+ * YouTube jobs catch it and fetch fresh URLs; everything else fails as before.
+ */
+class LinkExpiredException : IllegalStateException("This link has expired — fetch the page again")
 
 /**
  * Speed over the last few seconds rather than since the connection opened.
@@ -448,12 +494,16 @@ internal class RateWindow(private val spanNanos: Long = 3_000_000_000L) {
  * naively produced "Class 09 ….mp4 [360p].mp4". The existing extension is
  * dropped before the quality tag is appended.
  */
-fun safeFileName(title: String, quality: String): String {
+fun safeFileName(title: String, quality: String, ext: String = "mp4"): String {
     val cleaned = title.replace(Regex("""[/\\:*?"<>|]"""), "-").trim()
     val base = cleaned
-        .replace(Regex("""\.(mp4|mkv|mov|m4v|webm|avi)$""", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("""\.(mp4|mkv|mov|m4v|webm|avi|m4a)$""", RegexOption.IGNORE_CASE), "")
         .trim()
         .take(90)
         .ifEmpty { "magpie" }
-    return "$base [$quality].mp4"
+    return "$base [$quality].$ext"
 }
+
+/** "Talk [720p].mp4" + "en" → "Talk [720p].en.srt", which players load with it. */
+fun subtitleName(videoName: String, lang: String): String =
+    videoName.substringBeforeLast('.') + ".$lang.srt"

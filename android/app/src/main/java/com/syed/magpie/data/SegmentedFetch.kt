@@ -38,9 +38,9 @@ object SegmentedFetch {
     data class Probe(val total: Long?, val acceptsRanges: Boolean)
 
     /** Asks for one byte: the reply reveals both the full size and range support. */
-    suspend fun probe(url: String, cookie: String): Probe = withContext(Dispatchers.IO) {
+    suspend fun probe(url: String, cookie: String, ua: String = Downloader.UA): Probe = withContext(Dispatchers.IO) {
         runCatching {
-            val c = conn(url, cookie, 0, 0)
+            val c = conn(url, cookie, ua, 0, 0)
             try {
                 val partial = c.responseCode == HttpURLConnection.HTTP_PARTIAL
                 val range = c.getHeaderField("Content-Range")
@@ -65,6 +65,7 @@ object SegmentedFetch {
         cookie: String,
         total: Long,
         connections: Int = CONNECTIONS,
+        ua: String = Downloader.UA,
         onBytes: (Long) -> Unit,
     ) = coroutineScope {
         val chunks = ceil(total.toDouble() / CHUNK).toInt()
@@ -89,8 +90,9 @@ object SegmentedFetch {
                     val end = min(start + CHUNK, total) - 1
                     RandomAccessFile(target, "rw").use { raf ->
                         raf.seek(start)
-                        val c = conn(url, cookie, start, end)
+                        val c = conn(url, cookie, ua, start, end)
                         try {
+                            if (c.responseCode == 403 || c.responseCode == 410) throw LinkExpiredException()
                             if (c.responseCode != HttpURLConnection.HTTP_PARTIAL &&
                                 c.responseCode !in 200..299
                             ) {
@@ -122,12 +124,12 @@ object SegmentedFetch {
         marks.delete()
     }
 
-    private fun conn(url: String, cookie: String, from: Long, to: Long): HttpURLConnection =
+    private fun conn(url: String, cookie: String, ua: String, from: Long, to: Long): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15_000
             readTimeout = 60_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", Downloader.UA)
+            setRequestProperty("User-Agent", ua)
             setRequestProperty("Accept", "*/*")
             if (cookie.isNotEmpty()) setRequestProperty("Cookie", cookie)
             setRequestProperty("Range", "bytes=$from-$to")

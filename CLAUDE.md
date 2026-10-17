@@ -95,6 +95,29 @@ feature list carried over from the old FTPDownloader app:
 - The engine runs 4 DhakaFlix jobs at once and 2 of everything else; a dropped
   LAN connection parks a job as Paused with the reason, not Failed.
 
+## YouTube
+
+Read by **yt-dlp running on the phone** (youtubedl-android: Python + yt-dlp +
+QuickJS, no ffmpeg), not by a Rust extractor — YouTube's JS challenges, PO
+tokens and SABR change monthly and yt-dlp keeps up. yt-dlp only *reads*
+(`-J`); its JSON goes to `core/src/youtube.rs` (renditions, preset picking,
+captions → SRT, error classification), and bytes go through the normal
+`DownloadEngine` + Media3 merge with `source = "youtube"`.
+
+- Test on the desktop first: `magpie probe <yt-url>` / `magpie get <yt-url> --quality 720`
+  (needs `yt-dlp` on PATH). This machine's IP gets "confirm you're not a bot"
+  for videos; playlists and channels still list.
+- yt-dlp updates itself: synchronously on first use (the APK's copy is old),
+  then daily in the background, and on an "outdated"-looking failure.
+  Settings → YouTube → Update forces it.
+- Stream URLs expire (`expire=`) and are IP-bound, so `YouTube.prepare` re-reads
+  the link before a job starts, and once more on a 403 (`LinkExpiredException`).
+  Format ids live in `renditionId` ("137+140") so partial bytes stay valid.
+- Playlist entries are queued unresolved (`preset` set, URLs empty) and read
+  when their turn comes. YouTube has its own lane of 2 in the engine.
+- `jniLibs { useLegacyPackaging = true }` is required: Python is unpacked from
+  `libpython.zip.so` in the installed native-lib dir. Adds ~17 MB to the APK.
+
 ## House rules
 
 - Renditions are always sorted smallest-first, unknown sizes last; the UI marks

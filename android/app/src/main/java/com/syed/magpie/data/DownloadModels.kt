@@ -42,6 +42,22 @@ data class DownloadJob(
     val mime: String = "video/mp4",
     /** Under Downloads/, where the saved file goes. */
     val folder: String = "Magpie",
+    /** The User-Agent the stream URLs were issued to (YouTube's are tied to it). */
+    val userAgent: String? = null,
+    /**
+     * YouTube: the quality preset a playlist entry was queued at. Its streams
+     * are only looked up when the job starts, because YouTube's URLs expire
+     * in hours and a long playlist can wait longer than that.
+     */
+    val preset: String? = null,
+    /** YouTube subtitles fetched beside the video, as an .srt. */
+    val subtitleLang: String? = null,
+    val subtitleAuto: Boolean = false,
+    val subtitleUrl: String? = null,
+    val subtitleExt: String? = null,
+    val subtitleUri: String? = null,
+    /** A picture for the library row while there is no file to take a frame from. */
+    val thumbnail: String? = null,
 ) {
     val fraction: Float
         get() {
@@ -82,6 +98,14 @@ data class DownloadJob(
         put("createdAt", createdAt)
         put("mime", mime)
         put("folder", folder)
+        put("userAgent", userAgent ?: JSONObject.NULL)
+        put("preset", preset ?: JSONObject.NULL)
+        put("subtitleLang", subtitleLang ?: JSONObject.NULL)
+        put("subtitleAuto", subtitleAuto)
+        put("subtitleUrl", subtitleUrl ?: JSONObject.NULL)
+        put("subtitleExt", subtitleExt ?: JSONObject.NULL)
+        put("subtitleUri", subtitleUri ?: JSONObject.NULL)
+        put("thumbnail", thumbnail ?: JSONObject.NULL)
     }
 
     companion object {
@@ -105,6 +129,14 @@ data class DownloadJob(
             createdAt = o.optLong("createdAt", System.currentTimeMillis()),
             mime = o.optString("mime", "video/mp4"),
             folder = o.optString("folder", "Magpie"),
+            userAgent = o.optStringOrNull("userAgent"),
+            preset = o.optStringOrNull("preset"),
+            subtitleLang = o.optStringOrNull("subtitleLang"),
+            subtitleAuto = o.optBoolean("subtitleAuto"),
+            subtitleUrl = o.optStringOrNull("subtitleUrl"),
+            subtitleExt = o.optStringOrNull("subtitleExt"),
+            subtitleUri = o.optStringOrNull("subtitleUri"),
+            thumbnail = o.optStringOrNull("thumbnail"),
         )
 
         fun listToJson(jobs: List<DownloadJob>): String =

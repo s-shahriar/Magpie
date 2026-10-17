@@ -2,7 +2,11 @@
 
 /// One downloadable stream. Facebook and Drive both fan out into several of
 /// these; the UI shows them as a quality list with a size estimate.
-#[derive(Debug, Clone, uniffi::Record)]
+///
+/// The fields after `url` are YouTube's: its ladder repeats a height across
+/// codecs, frame rates and dubbed audio tracks, which the other sources never
+/// do. They default so the Kotlin side can keep building renditions without them.
+#[derive(Debug, Clone, Default, uniffi::Record)]
 pub struct Rendition {
     /// Stable id for this rendition within a probe (what the UI passes back).
     pub id: String,
@@ -21,6 +25,34 @@ pub struct Rendition {
     pub mime: Option<String>,
     pub codec: Option<String>,
     pub url: String,
+    #[uniffi(default = None)]
+    pub fps: Option<u32>,
+    #[uniffi(default = false)]
+    pub hdr: bool,
+    /// Audio track language, e.g. "en-US". Only set on multi-language videos.
+    #[uniffi(default = None)]
+    pub language: Option<String>,
+    /// The source's own name for the track: "English (US) original".
+    #[uniffi(default = None)]
+    pub track_name: Option<String>,
+    /// The track the video was recorded in, as opposed to a dub.
+    #[uniffi(default = false)]
+    pub original: bool,
+    /// The User-Agent the URL was issued to. Sent back when fetching it.
+    #[uniffi(default = None)]
+    pub user_agent: Option<String>,
+}
+
+/// One subtitle language a video offers.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct SubTrack {
+    pub lang: String,
+    pub name: String,
+    /// Speech recognition rather than captions someone wrote.
+    pub auto: bool,
+    pub url: String,
+    /// The format at `url`: "json3" or "vtt". `captions_to_srt` reads both.
+    pub ext: String,
 }
 
 /// Everything a probe learned about one piece of media.
@@ -38,6 +70,15 @@ pub struct MediaInfo {
     pub audio: Vec<Rendition>,
     /// True when a chosen `video` already contains audio and needs no muxing.
     pub muxed: bool,
+    #[uniffi(default = None)]
+    pub uploader: Option<String>,
+    /// Written captions first, then auto-generated ones; each by name.
+    #[uniffi(default = [])]
+    pub subtitles: Vec<SubTrack>,
+    /// Set when the link was a video inside a playlist, so the UI can offer
+    /// the whole list as well.
+    #[uniffi(default = None)]
+    pub playlist_url: Option<String>,
 }
 
 /// What a captured stream URL declares about itself.

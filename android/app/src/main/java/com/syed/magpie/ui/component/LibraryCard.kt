@@ -165,12 +165,18 @@ private fun CardMenu(actions: List<CardAction>) {
  * What a card shows on its left: a frame of the saved video when there is
  * one, else a still image, else the module's icon.
  */
-data class Thumb(val video: Uri? = null, val image: String? = null, val icon: ImageVector)
+data class Thumb(
+    val video: Uri? = null,
+    val image: String? = null,
+    val icon: ImageVector,
+    /** A picture on the web, for when there is no file to take one from yet. */
+    val web: String? = null,
+)
 
 @Composable
 private fun LibraryThumb(thumb: Thumb) {
     val context = LocalContext.current
-    val bitmap by produceState<ImageBitmap?>(null, thumb.video, thumb.image) {
+    val bitmap by produceState<ImageBitmap?>(null, thumb.video, thumb.image, thumb.web) {
         value = withContext(Dispatchers.IO) {
             thumb.video?.let { uri ->
                 runCatching {
@@ -193,7 +199,7 @@ private fun LibraryThumb(thumb: Thumb) {
                     }.asImageBitmap()
                 }.getOrNull()
             }
-        }
+        } ?: thumb.web?.let { com.syed.magpie.data.WebImages.load(it, 200) }
     }
     Box(
         Modifier

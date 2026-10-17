@@ -8,7 +8,7 @@ megabytes, and downloads the one you pick straight into `Downloads/Magpie`.
 
 | | |
 |---|---|
-| **Sources** | Facebook (incl. private groups you're a member of), Google Drive (incl. view-only) |
+| **Sources** | YouTube (videos, playlists, channels — via on-device yt-dlp), Facebook (incl. private groups you're a member of), Google Drive (incl. view-only) |
 | **Quality** | Every rendition listed with a size preview before you commit |
 | **Storage** | MediaStore → `Downloads/Magpie`. No storage permission, **no root** |
 | **Merging** | Platform `MediaMuxer`, stream copy. No bundled ffmpeg |

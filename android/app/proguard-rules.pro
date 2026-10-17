@@ -8,3 +8,11 @@
 # never reaches them, so R8 only needs to stop warning about the dangling refs.
 -dontwarn java.awt.**
 -dontwarn javax.swing.**
+
+# youtubedl-android reads its update metadata with Jackson and unpacks Python
+# with commons-compress; both reach their classes reflectively.
+-keep class com.yausername.** { *; }
+-keep class org.apache.commons.compress.archivers.zip.** { *; }
+-keep class com.fasterxml.jackson.databind.** { *; }
+-dontwarn com.fasterxml.jackson.databind.**
+-dontwarn java.beans.**

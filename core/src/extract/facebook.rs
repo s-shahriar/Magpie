@@ -140,6 +140,9 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
         video: Vec::new(),
         audio: Vec::new(),
         muxed: false,
+        uploader: None,
+        subtitles: Vec::new(),
+        playlist_url: None,
     };
 
     // One entry per vencode_tag: the same rendition is repeated many times
@@ -167,6 +170,7 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
             mime: None,
             codec: codec_for(&f.tag),
             url: f.url.clone(),
+            ..Default::default()
         };
         if is_audio {
             info.audio.push(r);
@@ -233,6 +237,7 @@ fn progressive(page: &str, cookie: &str) -> Vec<Rendition> {
             mime: Some("video/mp4".into()),
             codec: Some("h264".into()),
             url,
+            ..Default::default()
         });
     }
     out

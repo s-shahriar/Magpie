@@ -89,8 +89,8 @@ android {
         applicationId = "com.syed.magpie"
         minSdk = 31
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.8.0"
+        versionCode = 11
+        versionName = "0.9.0"
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -139,7 +139,13 @@ android {
     buildFeatures { compose = true; buildConfig = true }
 
     sourceSets["main"].java.srcDir(uniffiOut)
-    packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
+    packaging {
+        resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+        // yt-dlp's Python ships as libpython.zip.so and is unpacked from the
+        // installed native-library directory, so libraries must be extracted
+        // at install rather than mapped straight out of the APK.
+        jniLibs { useLegacyPackaging = true }
+    }
 }
 
 // Bindings must exist before Kotlin compiles.
@@ -168,6 +174,7 @@ dependencies {
     implementation(libs.androidx.media3.muxer)
     implementation(libs.androidx.media3.common)
     implementation(libs.jna) { artifact { type = "aar" } }
+    implementation(libs.youtubedl.android)
     debugImplementation(libs.androidx.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)

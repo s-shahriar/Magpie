@@ -99,6 +99,7 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
             mime: Some("video/mp4".into()),
             codec: None,
             url: lowercase_unescape(surl),
+            ..Default::default()
         });
     }
 
@@ -123,6 +124,7 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
             mime: Some("video/mp4".into()),
             codec: None,
             url: source,
+            ..Default::default()
         });
     }
 
@@ -150,6 +152,9 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
         video,
         audio: Vec::new(),
         muxed: true,
+        uploader: None,
+        subtitles: Vec::new(),
+        playlist_url: None,
     };
     info.estimate_sizes();
     Ok(info)

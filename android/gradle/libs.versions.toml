@@ -15,6 +15,7 @@ webkit = "1.17.0"
 media3 = "1.5.1"
 junit = "4.13.2"
 json = "20250517"
+youtubedl = "0.18.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -40,6 +41,9 @@ androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "w
 # whole videos in a VP9-only ladder. This one writes them.
 androidx-media3-muxer = { group = "androidx.media3", name = "media3-muxer", version.ref = "media3" }
 androidx-media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
+# yt-dlp with its own Python and QuickJS, for YouTube. No ffmpeg module:
+# merging stays with Media3, as it is for every other source.
+youtubedl-android = { group = "io.github.junkfood02.youtubedl-android", name = "library", version.ref = "youtubedl" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 # Real org.json for JVM unit tests; the Android stub throws on every call.
 org-json = { group = "org.json", name = "json", version.ref = "json" }

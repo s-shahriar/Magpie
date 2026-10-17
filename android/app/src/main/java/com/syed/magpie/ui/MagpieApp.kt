@@ -20,7 +20,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.syed.magpie.data.Cookies
+import com.syed.magpie.ui.component.PlaylistSheet
 import com.syed.magpie.ui.component.QualitySheet
+import com.syed.magpie.ui.component.YouTubeSheet
 import com.syed.magpie.ui.screen.DhakaFlixScreen
 import com.syed.magpie.ui.screen.HomeScreen
 import com.syed.magpie.ui.screen.InstallerScreen
@@ -167,10 +169,28 @@ fun MagpieApp(
     }
 
     vm.chooser?.let { info ->
-        QualitySheet(
-            info = info,
-            onPick = { rendition, name -> vm.start(info, rendition, name) },
-            onDismiss = vm::dismissChooser,
+        if (info.source == com.syed.magpie.data.YouTube.SOURCE) {
+            YouTubeSheet(
+                info = info,
+                prefs = vm.youtubePrefs,
+                onPick = { video, audio, name, subtitle -> vm.startYouTube(info, video, audio, name, subtitle) },
+                onPlaylist = { vm.openPlaylist(info) },
+                onDismiss = vm::dismissChooser,
+            )
+        } else {
+            QualitySheet(
+                info = info,
+                onPick = { rendition, name -> vm.start(info, rendition, name) },
+                onDismiss = vm::dismissChooser,
+            )
+        }
+    }
+    vm.playlist?.let { list ->
+        PlaylistSheet(
+            list = list,
+            prefs = vm.youtubePrefs,
+            onQueue = { ids, quality, numbered, subs -> vm.queuePlaylist(list, ids, quality, numbered, subs) },
+            onDismiss = vm::dismissPlaylist,
         )
     }
 }

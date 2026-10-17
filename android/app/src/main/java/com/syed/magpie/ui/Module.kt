@@ -22,7 +22,7 @@ enum class Module(
     val icon: ImageVector,
     val hasLibrary: Boolean = true,
 ) {
-    Downloader("Downloader", "Facebook & Drive", Icons.Default.Download),
+    Downloader("Downloader", "YouTube, Facebook & Drive", Icons.Default.Download),
     StillVideo("Still → Video", "A photo as a long story", Icons.Default.Movie),
     Subtitles("Subtitles", "Bengali hints in .srt", Icons.Default.Subtitles),
     DhakaFlix("DhakaFlix", "Films & series on the LAN", Icons.Default.LiveTv),

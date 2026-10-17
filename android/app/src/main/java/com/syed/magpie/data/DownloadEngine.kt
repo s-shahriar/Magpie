@@ -31,11 +31,19 @@ import java.util.UUID
 object DownloadEngine {
 
     /**
-     * How many run at once, per source. Facebook and Drive throttle each
+     * How many run at once, per lane. Facebook and Drive throttle each
      * connection, so more than two only splits the same bandwidth; the
-     * DhakaFlix servers are on the LAN and serve four at full speed.
+     * DhakaFlix servers are on the LAN and serve four at full speed. YouTube
+     * gets its own two, so a long playlist does not hold a Drive lecture
+     * back until it is through.
      */
-    private fun capFor(source: String) = if (source == DhakaFlix.SOURCE) 4 else 2
+    private fun laneOf(source: String) = when (source) {
+        DhakaFlix.SOURCE -> "lan"
+        YouTube.SOURCE -> "youtube"
+        else -> "web"
+    }
+
+    private fun capFor(lane: String) = if (lane == "lan") 4 else 2
 
     private val _jobs = MutableStateFlow<List<DownloadJob>>(emptyList())
     val jobs: StateFlow<List<DownloadJob>> = _jobs.asStateFlow()
@@ -55,6 +63,7 @@ object DownloadEngine {
         appContext = context.applicationContext
         store = DownloadStore(appContext)
         downloader = Downloader(appContext)
+        YouTube.init(appContext)
         _jobs.value = store.load()
         Episodes.init(appContext)
         Episodes.prune(_jobs.value)
@@ -77,8 +86,8 @@ object DownloadEngine {
         totalBytes: Long?,
         mime: String = "video/mp4",
         folder: String = "Magpie",
-    ) {
-        val job = DownloadJob(
+    ) = enqueue(
+        DownloadJob(
             id = UUID.randomUUID().toString(),
             sourceUrl = sourceUrl,
             source = source,
@@ -91,8 +100,16 @@ object DownloadEngine {
             totalBytes = totalBytes,
             mime = mime,
             folder = folder,
-        )
-        update { it + job }
+        ),
+    )
+
+    /** Queues a job built elsewhere — YouTube's carry more than the above. */
+    fun enqueue(job: DownloadJob) = enqueueAll(listOf(job))
+
+    /** A playlist's worth at once: one list update, one save, one pump. */
+    fun enqueueAll(batch: List<DownloadJob>) {
+        if (batch.isEmpty()) return
+        update { it + batch }
         pump()
     }
 
@@ -130,19 +147,23 @@ object DownloadEngine {
         val job = current(id) ?: return@launch
         // A DhakaFlix file keeps its own extension: it is an .mkv or an .srt,
         // not a merged MP4.
-        val fileName = if (job.source == DhakaFlix.SOURCE) {
-            DhakaFlix.fileName(title, job.fileName.substringAfterLast('.', ""))
-        } else {
-            safeFileName(title, job.quality)
+        val fileName = when (job.source) {
+            DhakaFlix.SOURCE -> DhakaFlix.fileName(title, job.fileName.substringAfterLast('.', ""))
+            // An audio-only download stays an .m4a or a .webm.
+            YouTube.SOURCE -> safeFileName(title, job.quality, job.fileName.substringAfterLast('.', "mp4"))
+            else -> safeFileName(title, job.quality)
         }
-        job.outputUri?.let { uri ->
+        fun renameTo(uri: String?, name: String) = uri?.let {
             runCatching {
                 val values = android.content.ContentValues().apply {
-                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
                 }
-                appContext.contentResolver.update(android.net.Uri.parse(uri), values, null, null)
+                appContext.contentResolver.update(android.net.Uri.parse(it), values, null, null)
             }
         }
+        renameTo(job.outputUri, fileName)
+        // The .srt follows, or players stop finding it beside the video.
+        job.subtitleLang?.let { renameTo(job.subtitleUri, subtitleName(fileName, it)) }
         patch(id) { it.copy(title = title, fileName = fileName) }
     }
 
@@ -167,15 +188,15 @@ object DownloadEngine {
             lock.withLock {
                 val all = _jobs.value
                 val busy = all.filter { it.id in running.keys }
-                    .groupingBy { it.source == DhakaFlix.SOURCE }
+                    .groupingBy { laneOf(it.source) }
                     .eachCount()
                     .toMutableMap()
                 all.filter { it.status == DownloadStatus.QUEUED && it.id !in running.keys }
                     .sortedBy { it.createdAt }
                     .forEach { job ->
-                        val lane = job.source == DhakaFlix.SOURCE
+                        val lane = laneOf(job.source)
                         val n = busy[lane] ?: 0
-                        if (n < capFor(job.source)) {
+                        if (n < capFor(lane)) {
                             // Claimed under the lock, before the job's first
                             // suspension, so a burst of enqueues cannot all
                             // see a free slot and start at once.
@@ -191,7 +212,7 @@ object DownloadEngine {
     private fun launchJob(job: DownloadJob) = scope.launch {
         patch(job.id) { it.copy(status = DownloadStatus.DOWNLOADING, stage = "Starting", error = null) }
         try {
-            val uri = downloader.run(current(job.id) ?: job) { p ->
+            val onTick: (Tick) -> Unit = { p ->
                 patch(job.id) {
                     it.copy(
                         status = p.status,
@@ -202,11 +223,24 @@ object DownloadEngine {
                     )
                 }
             }
+            val uri = if (job.source == YouTube.SOURCE) {
+                // A refused URL usually just means stale: fetch fresh ones
+                // once, and carry on from the bytes already here.
+                try {
+                    downloader.run(freshYouTube(job.id, force = false), onTick)
+                } catch (e: LinkExpiredException) {
+                    downloader.run(freshYouTube(job.id, force = true), onTick)
+                }
+            } else {
+                downloader.run(current(job.id) ?: job, onTick)
+            }
+            val subtitles = current(job.id)?.let(downloader::publishSubtitles)
             patch(job.id) {
                 it.copy(
                     status = DownloadStatus.COMPLETED,
                     stage = "Saved",
                     outputUri = uri.toString(),
+                    subtitleUri = subtitles?.toString(),
                     bytesPerSecond = 0,
                     downloadedBytes = it.totalBytes ?: it.downloadedBytes,
                 )
@@ -250,6 +284,42 @@ object DownloadEngine {
             lock.withLock { running.remove(job.id) }
             pump()
         }
+    }
+
+    /**
+     * The job as stored, with stream URLs that will last the download. A job
+     * whose formats changed under it starts its bytes over: the partial file
+     * belongs to a different stream.
+     */
+    private suspend fun freshYouTube(id: String, force: Boolean): DownloadJob {
+        val job = current(id) ?: error("Job removed")
+        if (force || job.videoUrl.isEmpty()) {
+            patch(id) { it.copy(stage = "Reading link") }
+        }
+        val (fresh, changed) = YouTube.prepare(job, force)
+        if (changed) {
+            partials(id).forEach { it.delete() }
+            patch(id) { fresh.copy(downloadedBytes = 0) }
+        } else {
+            // Only the resolved fields: progress ticks may have moved on.
+            patch(id) {
+                it.copy(
+                    renditionId = fresh.renditionId,
+                    quality = fresh.quality,
+                    videoUrl = fresh.videoUrl,
+                    audioUrl = fresh.audioUrl,
+                    userAgent = fresh.userAgent,
+                    totalBytes = fresh.totalBytes,
+                    mime = fresh.mime,
+                    fileName = fresh.fileName,
+                    subtitleUrl = fresh.subtitleUrl,
+                    subtitleExt = fresh.subtitleExt,
+                    subtitleAuto = fresh.subtitleAuto,
+                    stage = "",
+                )
+            }
+        }
+        return current(id) ?: fresh
     }
 
     // ---- state ---------------------------------------------------------
@@ -309,6 +379,7 @@ object DownloadEngine {
             "dl-$id-a.part",
             "dl-$id-a.part.chunks",
             "dl-$id-out.mp4",
+            "dl-$id-s.srt",
         )
         // Both homes: partials moved out of the cache once the system started
         // reclaiming them mid-download, and a queue restored from an older
