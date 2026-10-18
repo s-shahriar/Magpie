@@ -326,7 +326,7 @@ class Downloader(private val context: Context) {
         //   a fresh buffer and queued, which on an hour of video is hundreds of
         //   thousands of allocations and a GC storm. Written straight from the
         //   read buffer instead, which is safe because each write completes
-        //   before the next read.
+        //   before the next read — but see the BufferInfo note below.
         val muxer = Mp4Muxer.Builder(FileOutputStream(target))
             .setAttemptStreamableOutputEnabled(false)
             .setSampleBatchingEnabled(false)
@@ -373,7 +373,6 @@ class Downloader(private val context: Context) {
             // Direct: the extractor copies straight in, rather than through a
             // heap array on every sample.
             var buffer = ByteBuffer.allocateDirect(maxBuffer)
-            val info = MediaCodec.BufferInfo()
             var copied = 0L
             var lastReport = 0L
             var readNanos = 0L
@@ -407,10 +406,11 @@ class Downloader(private val context: Context) {
                     live.remove(pick)
                     continue
                 }
-                info.offset = 0
-                info.size = size
-                info.presentationTimeUs = ex.sampleTime
-                info.flags = ex.sampleFlags
+                // A new BufferInfo every sample: with copying off, the muxer
+                // keeps this object and builds the index from it at the end.
+                // Reusing one made every entry describe the last sample, and
+                // the file would not decode.
+                val info = MediaCodec.BufferInfo().apply { set(0, size, ex.sampleTime, ex.sampleFlags) }
                 val t1 = System.nanoTime()
                 muxer.writeSampleData(track, buffer, info)
                 val t2 = System.nanoTime()

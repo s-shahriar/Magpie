@@ -17,18 +17,30 @@ use serde_json::Value;
 
 pub const SOURCE: &str = "youtube";
 
-/// Which YouTube player clients yt-dlp asks, in order.
+/// Arguments for a yt-dlp read, first try.
 ///
-/// yt-dlp's default set is refused outright ("Sign in to confirm you're not
-/// a bot") on an IP YouTube has flagged — a home connection included — while
-/// the embedded-player client still gets the whole ladder, up to 2160p and
-/// every dubbed track. `mweb` covers what embedding is disabled for, and the
-/// defaults stay last so nothing they would have found is lost.
-pub const PLAYER_CLIENTS: &str = "web_embedded,mweb,default";
-
-/// Arguments every front end adds to a yt-dlp read.
+/// yt-dlp's default clients get "confirm you're not a bot" on an IP YouTube
+/// has flagged — a home connection included — while the embedded-player
+/// client still gets the whole ladder, up to 2160p and every dubbed track.
+/// Asking only that one, and skipping the watch page (which such an IP is
+/// refused anyway), saves several round trips on every read.
 pub fn ytdlp_args() -> Vec<String> {
-    vec!["--extractor-args".into(), format!("youtube:player_client={PLAYER_CLIENTS}")]
+    vec![
+        "--extractor-args".into(),
+        "youtube:player_client=web_embedded;player_skip=webpage".into(),
+    ]
+}
+
+/// Arguments for the second try, when the first failed or came back thin —
+/// embedding disabled, say. The other clients, then yt-dlp's own choice.
+pub fn ytdlp_fallback_args() -> Vec<String> {
+    vec!["--extractor-args".into(), "youtube:player_client=mweb,default".into()]
+}
+
+/// A first read worth retrying: no separate video streams means YouTube
+/// served the embedded client a cut-down list.
+pub fn is_thin(info: &MediaInfo) -> bool {
+    !info.video.iter().any(|r| r.kind == "video")
 }
 
 /// How many of a channel's uploads are listed, newest first.

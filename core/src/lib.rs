@@ -76,10 +76,16 @@ pub fn youtube_link(url: String) -> Option<YtLink> {
     youtube::link(url.trim())
 }
 
-/// Arguments to add to every yt-dlp read (which player clients to ask).
+/// Arguments for a yt-dlp read: the fast first try, or the fallback.
 #[uniffi::export]
-pub fn youtube_ytdlp_args() -> Vec<String> {
-    youtube::ytdlp_args()
+pub fn youtube_ytdlp_args(fallback: bool) -> Vec<String> {
+    if fallback { youtube::ytdlp_fallback_args() } else { youtube::ytdlp_args() }
+}
+
+/// True when a first read came back without separate video streams.
+#[uniffi::export]
+pub fn youtube_is_thin(info: MediaInfo) -> bool {
+    youtube::is_thin(&info)
 }
 
 /// Renditions from `yt-dlp -J <video>` output.

@@ -78,9 +78,18 @@ fn run() -> Result<()> {
 
 /// Runs `yt-dlp -J` and returns its stdout; stderr is classified on failure.
 fn ytdlp(url: &str, cookies: Option<&str>, flat: bool) -> Result<String> {
+    match ytdlp_with(url, cookies, flat, magpie_core::youtube::ytdlp_args()) {
+        Ok(json) if flat => Ok(json),
+        // Same rule as the app: a thin or failed first read gets one retry.
+        Ok(json) if magpie_core::youtube::media(&json).is_ok_and(|i| !magpie_core::youtube::is_thin(&i)) => Ok(json),
+        first => ytdlp_with(url, cookies, flat, magpie_core::youtube::ytdlp_fallback_args()).or(first),
+    }
+}
+
+fn ytdlp_with(url: &str, cookies: Option<&str>, flat: bool, args: Vec<String>) -> Result<String> {
     let mut cmd = Command::new("yt-dlp");
     cmd.args(["-J", "--no-warnings"]);
-    cmd.args(magpie_core::youtube::ytdlp_args());
+    cmd.args(args);
     if magpie_core::youtube::link(url).is_some_and(|l| l.is_channel) {
         cmd.args(["--playlist-end", &magpie_core::youtube::CHANNEL_LIMIT.to_string()]);
     }

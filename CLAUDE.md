@@ -117,9 +117,22 @@ captions → SRT, error classification), and bytes go through the normal
   when their turn comes. YouTube has its own lane of 2 in the engine.
 - `jniLibs { useLegacyPackaging = true }` is required: Python is unpacked from
   `libpython.zip.so` in the installed native-lib dir. Adds ~17 MB to the APK.
-- Player clients are pinned (`youtube::PLAYER_CLIENTS` = `web_embedded,mweb,default`):
-  yt-dlp's defaults get "confirm you're not a bot" on a flagged home IP while
-  `web_embedded` still returns the full ladder. Change it there, not per caller.
+- Clients: `youtube::ytdlp_args()` asks `web_embedded` only, skipping the watch
+  page; a failed or "thin" read (no separate video streams) retries with
+  `ytdlp_fallback_args()` (`mweb,default`). yt-dlp's defaults get "confirm
+  you're not a bot" on a flagged home IP; `web_embedded` still gets the ladder.
+- **Read speed** comes from `assets/ytdlp/magpie_cache.py`, a yt-dlp plugin
+  (`--plugin-dirs`, one level above `yt_dlp_plugins/`) that keeps the player JS
+  and enables EJS's preprocessed-player cache. Without it every read fetched
+  and preprocessed ~3 MB of JS: ~12 s → ~4 s per read.
+- **Pass `--cache-dir`.** youtubedl-android adds `--no-cache-dir` when a request
+  has none, which silently disables every yt-dlp cache.
+- The library's updater reads GitHub with no timeout; `YouTube.update` waits
+  30 s on first run, 90 s otherwise, and lets a slow update finish in the background.
+- Debug builds log yt-dlp's `-v` output and timing under the `MagpieYtdlp` tag.
+- Waydroid (`waydroid session start`, `adb connect <ip>:5555`) is x86_64 with
+  4 KB pages — a good test device. Build with an init script adding the
+  `x86_64` abiFilter, and `cargo ndk -t x86_64` first: Gradle only rebuilds arm64.
 - Search is `ytsearchN:<query>` with `--flat-playlist`; it parses as a playlist.
 
 ## Merging (Media3 `Mp4Muxer`) — what bit us
@@ -131,6 +144,10 @@ captions → SRT, error classification), and bytes go through the normal
   file would not play. `Vp9Config` builds one from the first keyframe.
 - **Speed:** streamable output (index rewritten every second of media), sample
   batching and sample copying are all off. Samples are fed interleaved by time.
+  ~20–45 MB/s on Waydroid, from 3.7 MB/s.
+- **With copying off, Media3 keeps the `BufferInfo` you pass** and builds the
+  index from it at the end. Reusing one object made every index entry describe
+  the last sample — a file that would not decode. New `BufferInfo` per sample.
 - Tags and chapters (`mp4tags.rs`) are added by rewriting the trailing `moov`
   in place, so the merged index must stay the last box.
 - `magpie probe` + ffprobe on a pulled file is the fastest way to check a box:

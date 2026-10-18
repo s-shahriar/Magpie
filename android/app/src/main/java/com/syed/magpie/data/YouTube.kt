@@ -7,7 +7,10 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -24,6 +27,7 @@ import uniffi.magpie_core.youtubeLink
 import uniffi.magpie_core.youtubeMedia
 import uniffi.magpie_core.youtubePick
 import uniffi.magpie_core.youtubePlaylist
+import uniffi.magpie_core.youtubeIsThin
 import uniffi.magpie_core.youtubeYtdlpArgs
 import java.io.File
 
@@ -55,11 +59,14 @@ object YouTube {
     const val FOLDER = "Magpie/YouTube"
     private const val CHANNEL_LIMIT = 200
     private const val DAY = 24 * 60 * 60 * 1000L
+    private const val FIRST_RUN_WAIT = 30_000L
+    private const val UPDATE_WAIT = 90_000L
 
     private lateinit var appContext: Context
     private val prefs by lazy { YouTubePrefs(appContext) }
     private val setup = Mutex()
-    private val updating = Mutex()
+    /** The update in flight, shared by everyone who asks for one. */
+    @Volatile private var updateJob: Deferred<Result<String?>>? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var ready = false
 
@@ -103,24 +110,37 @@ object YouTube {
         // Never updated: the copy inside the APK is too old to trust with
         // YouTube, so this one waits. After that, once a day in the background.
         if (YoutubeDL.getInstance().version(appContext) == null) {
+            // Waited for, but not forever: the library reads GitHub's release
+            // list with no timeout, and a stalled request hung the first link
+            // indefinitely. Past this the bundled copy is tried, and the
+            // update carries on in the background.
             onNote("Updating yt-dlp…")
-            update()
+            update(FIRST_RUN_WAIT)
         } else if (System.currentTimeMillis() - prefs.lastUpdateCheck > DAY) {
-            scope.launch { update() }
+            startUpdate()
         }
     }
 
-    /** Fetches the newest yt-dlp release. Returns the version now installed. */
-    suspend fun update(): Result<String?> = withContext(Dispatchers.IO) {
-        updating.withLock {
+    /**
+     * Fetches the newest yt-dlp release and returns the version now
+     * installed, waiting at most [wait]. A slower update is not abandoned —
+     * it finishes in the background, and the next caller joins it rather
+     * than starting another.
+     */
+    suspend fun update(wait: Long = UPDATE_WAIT): Result<String?> =
+        withTimeoutOrNull(wait) { startUpdate().await() }
+            ?: Result.failure(java.io.IOException("GitHub is not answering — the update will keep trying in the background"))
+
+    @Synchronized
+    private fun startUpdate(): Deferred<Result<String?>> =
+        updateJob?.takeIf { it.isActive } ?: scope.async {
             runCatching {
                 start()
                 YoutubeDL.getInstance().updateYoutubeDL(appContext, YoutubeDL.UpdateChannel._STABLE)
                 prefs.lastUpdateCheck = System.currentTimeMillis()
                 YoutubeDL.getInstance().version(appContext)
             }
-        }
-    }
+        }.also { updateJob = it }
 
     /** The installed yt-dlp version, or null before the first update. */
     fun version(): String? = runCatching { YoutubeDL.getInstance().version(appContext) }.getOrNull()
@@ -129,8 +149,18 @@ object YouTube {
     suspend fun video(url: String, onNote: (String) -> Unit = {}): MediaInfo {
         val link = youtubeLink(url) ?: throw YouTubeException(YtFailure("other", "Not a YouTube link"))
         val target = link.videoUrl ?: throw YouTubeException(YtFailure("other", "That link is a playlist"))
-        val json = run(target, listOf("--no-playlist"), onNote)
-        return youtubeMedia(json).copy(playlistUrl = link.playlistUrl)
+        // The fast read first; a failed or cut-down one gets the other
+        // clients, and whichever saw more is kept.
+        val first = runCatching { youtubeMedia(run(target, listOf("--no-playlist"), onNote)) }
+        val firstErr = first.exceptionOrNull()
+        val usable = first.getOrNull()?.takeIf { !youtubeIsThin(it) }
+        val info = usable ?: if (firstErr is YouTubeException && firstErr.failure.kind == "network") {
+            throw firstErr
+        } else {
+            runCatching { youtubeMedia(run(target, listOf("--no-playlist"), onNote, fallback = true)) }
+                .getOrElse { second -> first.getOrNull() ?: throw second }
+        }
+        return info.copy(playlistUrl = link.playlistUrl)
     }
 
     /** A playlist, mix or channel, flat: titles and ids, no streams yet. */
@@ -161,34 +191,71 @@ object YouTube {
      * YouTube gets one fresh yt-dlp and a second try, unless it was updated
      * within the hour and the update is not the answer.
      */
-    private suspend fun run(url: String, extra: List<String>, onNote: (String) -> Unit): String {
+    private suspend fun run(
+        url: String,
+        extra: List<String>,
+        onNote: (String) -> Unit,
+        fallback: Boolean = false,
+    ): String {
         ensureReady(onNote)
         return try {
-            exec(url, extra)
+            exec(url, extra, fallback)
         } catch (e: YouTubeException) {
             val stale = System.currentTimeMillis() - prefs.lastUpdateCheck > 60 * 60 * 1000L
             if (e.failure.kind != "outdated" || !stale) throw e
             onNote("Updating yt-dlp…")
             update()
-            exec(url, extra)
+            exec(url, extra, fallback)
         }
     }
 
-    private suspend fun exec(url: String, extra: List<String>): String = withContext(Dispatchers.IO) {
+    private suspend fun exec(url: String, extra: List<String>, fallback: Boolean = false): String = withContext(Dispatchers.IO) {
         val request = YoutubeDLRequest(url).apply {
             addOption("-J")
-            addOption("--no-warnings")
-            youtubeYtdlpArgs().chunked(2).forEach { (k, v) -> addOption(k, v) }
+            if (!com.syed.magpie.BuildConfig.DEBUG) addOption("--no-warnings")
+            // Without one the library passes --no-cache-dir, and the player
+            // cache the plugin keeps would be thrown away every run. App
+            // files rather than the cache dir, which Android may empty.
+            addOption("--cache-dir", File(appContext.filesDir, "ytdlp-cache").absolutePath)
+            youtubeYtdlpArgs(fallback).chunked(2).forEach { (k, v) -> addOption(k, v) }
+            plugins?.let { addOption("--plugin-dirs", it.absolutePath) }
             extra.forEach { addOption(it) }
             cookieFile()?.let { addOption("--cookies", it.absolutePath) }
+            if (com.syed.magpie.BuildConfig.DEBUG) addOption("-v")
         }
         try {
-            YoutubeDL.getInstance().execute(request).out
+            val response = YoutubeDL.getInstance().execute(request)
+            if (com.syed.magpie.BuildConfig.DEBUG) {
+                android.util.Log.d("MagpieYtdlp", "${response.elapsedTime} ms for $url")
+                response.err.lineSequence()
+                    .filter { l -> listOf("Plugin dir", "player", "jsc", "Downloading", "cache", "ERROR", "WARNING").any { it in l } }
+                    .forEach { android.util.Log.d("MagpieYtdlp", it.take(200)) }
+            }
+            response.out
         } catch (e: YoutubeDLException) {
             throw YouTubeException(youtubeFailure(e.message.orEmpty()))
         } catch (e: InterruptedException) {
             throw kotlinx.coroutines.CancellationException("yt-dlp interrupted")
         }
+    }
+
+    /**
+     * Magpie's yt-dlp plugin (assets/ytdlp/magpie_cache.py), which keeps
+     * YouTube's player script between runs — without it every read fetched
+     * and preprocessed several megabytes of JavaScript, most of the wait.
+     * Copied out once per process so an app update brings its new version.
+     * yt-dlp looks for packages one level inside the directory it is given.
+     */
+    private val plugins: File? by lazy {
+        runCatching {
+            val root = File(appContext.filesDir, "ytdlp-plugins")
+            val file = File(root, "magpie/yt_dlp_plugins/extractor/magpie_cache.py")
+            file.parentFile!!.mkdirs()
+            appContext.assets.open("ytdlp/magpie_cache.py").use { input ->
+                file.outputStream().use { input.copyTo(it) }
+            }
+            root
+        }.getOrNull()
     }
 
     /**
