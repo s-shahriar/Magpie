@@ -10,12 +10,26 @@
 //! list into renditions under the house rules, choosing a pair for a quality
 //! preset, and reading captions. The Android app and the CLI share all of it.
 
-use crate::model::{MagpieError, MediaInfo, Rendition, SubTrack};
+use crate::model::{Chapter, MagpieError, MediaInfo, Rendition, SubTrack};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
 pub const SOURCE: &str = "youtube";
+
+/// Which YouTube player clients yt-dlp asks, in order.
+///
+/// yt-dlp's default set is refused outright ("Sign in to confirm you're not
+/// a bot") on an IP YouTube has flagged — a home connection included — while
+/// the embedded-player client still gets the whole ladder, up to 2160p and
+/// every dubbed track. `mweb` covers what embedding is disabled for, and the
+/// defaults stay last so nothing they would have found is lost.
+pub const PLAYER_CLIENTS: &str = "web_embedded,mweb,default";
+
+/// Arguments every front end adds to a yt-dlp read.
+pub fn ytdlp_args() -> Vec<String> {
+    vec!["--extractor-args".into(), format!("youtube:player_client={PLAYER_CLIENTS}")]
+}
 
 /// How many of a channel's uploads are listed, newest first.
 pub const CHANNEL_LIMIT: u32 = 200;
@@ -49,6 +63,12 @@ pub struct YtEntry {
     /// False for private, deleted and members-only entries, which stay listed
     /// so the numbering matches YouTube's but cannot be selected.
     pub available: bool,
+    /// Search results say whose video it is and how widely it was watched;
+    /// a playlist's entries usually do not.
+    #[uniffi(default = None)]
+    pub channel: Option<String>,
+    #[uniffi(default = None)]
+    pub views: Option<u64>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -269,6 +289,10 @@ pub fn media(json: &str) -> Result<MediaInfo, MagpieError> {
         uploader: s(&v, "channel").or_else(|| s(&v, "uploader")).map(str::to_string),
         subtitles: subtitles(&v),
         playlist_url: None,
+        chapters: chapters(&v),
+        upload_date: s(&v, "upload_date")
+            .filter(|d| d.len() == 8 && d.bytes().all(|b| b.is_ascii_digit()))
+            .map(|d| format!("{}-{}-{}", &d[..4], &d[4..6], &d[6..])),
     };
 
     let empty = Vec::new();
@@ -351,10 +375,16 @@ fn rendition(fmt: &Value) -> Option<Rendition> {
     // yt-dlp puts the original track at preference 10 and dubs below it.
     let original = fmt.get("language_preference").and_then(Value::as_i64) == Some(10)
         || note.contains("original");
-    // The note reads "English (US) original, medium": the name is the part
-    // before the comma, and only means something on a multi-language video.
+    // The note reads "English (US) original (default), medium": the name is
+    // the part before the comma, without the flags `original` already carries.
     let track_name = (kind != "video" && language.is_some())
-        .then(|| note.split(',').next().unwrap_or("").trim().to_string())
+        .then(|| {
+            note.split(',').next().unwrap_or("")
+                .replace(" (default)", "")
+                .replace(" original", "")
+                .trim()
+                .to_string()
+        })
         .filter(|n| !n.is_empty() && !n.ends_with('p'));
 
     Some(Rendition {
@@ -387,6 +417,19 @@ fn rendition(fmt: &Value) -> Option<Rendition> {
             .and_then(|h| s(h, "User-Agent"))
             .map(str::to_string),
     })
+}
+
+fn chapters(v: &Value) -> Vec<Chapter> {
+    let Some(list) = v.get("chapters").and_then(Value::as_array) else { return Vec::new() };
+    list.iter()
+        .filter_map(|c| {
+            let start = f(c, "start_time")?;
+            Some(Chapter {
+                start_ms: (start.max(0.0) * 1000.0) as u64,
+                title: s(c, "title").unwrap_or("").trim().to_string(),
+            })
+        })
+        .collect()
 }
 
 fn subtitles(v: &Value) -> Vec<SubTrack> {
@@ -460,6 +503,8 @@ pub fn playlist(json: &str) -> Result<YtPlaylist, MagpieError> {
             thumbnail: format!("https://i.ytimg.com/vi/{id}/mqdefault.jpg"),
             index: u(e, "playlist_index").map(|n| n as u32).unwrap_or(i as u32 + 1),
             available: !gone && !locked && !live,
+            channel: s(e, "channel").or_else(|| s(e, "uploader")).map(str::to_string),
+            views: u(e, "view_count"),
         });
     }
     if entries.is_empty() {
@@ -743,7 +788,8 @@ mod tests {
 
     const SAMPLE: &str = r#"{
       "_type": "video", "id": "abcdefghijk", "title": "A lecture", "duration": 600,
-      "channel": "Some Channel", "live_status": "not_live",
+      "channel": "Some Channel", "live_status": "not_live", "upload_date": "20240903",
+      "chapters": [{"start_time": 0, "title": "Intro", "end_time": 26}, {"start_time": 26.5, "title": " What is it? ", "end_time": 600}],
       "subtitles": {"en": [{"ext": "json3", "url": "https://x/en.json3", "name": "English"},
                            {"ext": "vtt", "url": "https://x/en.vtt", "name": "English"}]},
       "automatic_captions": {
@@ -755,7 +801,7 @@ mod tests {
         {"format_id": "sb0", "protocol": "mhtml", "url": "https://sb", "vcodec": "none", "acodec": "none", "ext": "mhtml"},
         {"format_id": "233", "protocol": "m3u8_native", "url": "https://hls", "vcodec": "none", "acodec": "mp4a.40.5"},
         {"format_id": "139", "protocol": "https", "url": "https://a/139", "vcodec": "none", "acodec": "mp4a.40.5", "abr": 48.8, "tbr": 48.8, "filesize": 3600000, "ext": "m4a", "language": "en", "language_preference": 10, "format_note": "English original, low"},
-        {"format_id": "140", "protocol": "https", "url": "https://a/140", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 129.5, "tbr": 129.5, "filesize": 9700000, "ext": "m4a", "language": "en", "language_preference": 10, "format_note": "English original, medium"},
+        {"format_id": "140", "protocol": "https", "url": "https://a/140", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 129.5, "tbr": 129.5, "filesize": 9700000, "ext": "m4a", "language": "en", "language_preference": 10, "format_note": "English (US) original (default), medium"},
         {"format_id": "140-drc", "protocol": "https", "url": "https://a/140d", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 129.5, "filesize": 9700000, "ext": "m4a"},
         {"format_id": "251", "protocol": "https", "url": "https://a/251", "vcodec": "none", "acodec": "opus", "abr": 135.0, "tbr": 135.0, "filesize": 9100000, "ext": "webm", "language": "en", "language_preference": 10, "format_note": "English original, medium"},
         {"format_id": "251-1", "protocol": "https", "url": "https://a/251-1", "vcodec": "none", "acodec": "opus", "abr": 130.0, "tbr": 130.0, "filesize": 9000000, "ext": "webm", "language": "es", "language_preference": -1, "format_note": "Spanish, medium"},
@@ -775,6 +821,14 @@ mod tests {
         let info = media(SAMPLE).unwrap();
         assert_eq!(info.source, "youtube");
         assert_eq!(info.uploader.as_deref(), Some("Some Channel"));
+        assert_eq!(info.upload_date.as_deref(), Some("2024-09-03"));
+        assert_eq!(
+            info.chapters,
+            [
+                Chapter { start_ms: 0, title: "Intro".into() },
+                Chapter { start_ms: 26_500, title: "What is it?".into() },
+            ]
+        );
         let ids: Vec<&str> = info.video.iter().map(|r| r.id.as_str()).collect();
         // Smallest first, the duplicate itag and the HLS/storyboard rows gone.
         assert_eq!(ids, ["134", "18", "398", "247", "136", "299", "337"]);
@@ -789,6 +843,9 @@ mod tests {
         assert_eq!(aud, ["139", "251-1", "251", "140"]);
         let es = info.audio.iter().find(|r| r.id == "251-1").unwrap();
         assert_eq!(es.track_name.as_deref(), Some("Spanish"));
+        let en = info.audio.iter().find(|r| r.id == "140").unwrap();
+        assert_eq!(en.track_name.as_deref(), Some("English (US)"));
+        assert!(en.original);
         assert!(!es.original);
         assert_eq!(info.video.iter().find(|r| r.id == "136").unwrap().user_agent.as_deref(), Some("UA/1"));
     }
@@ -863,7 +920,7 @@ mod tests {
     fn flat_playlist() {
         let json = r#"{"_type": "playlist", "id": "PLx", "title": "Course", "channel": "Prof",
           "entries": [
-            {"_type": "url", "id": "aaaaaaaaaaa", "title": "One", "duration": 61.0},
+            {"_type": "url", "id": "aaaaaaaaaaa", "title": "One", "duration": 61.0, "channel": "Prof", "view_count": 1200},
             {"_type": "url", "id": "bbbbbbbbbbb", "title": "[Private video]", "duration": null},
             {"_type": "url", "id": "ccccccccccc", "title": "Three", "availability": "subscriber_only"},
             {"_type": "url", "id": "ddddddddddd", "title": "Four", "duration": 10}
@@ -874,6 +931,9 @@ mod tests {
         assert_eq!(p.entries[0].duration_secs, 61);
         assert_eq!(p.entries.iter().map(|e| e.available).collect::<Vec<_>>(), [true, false, false, true]);
         assert_eq!(p.entries[3].index, 4);
+        assert_eq!(p.entries[0].channel.as_deref(), Some("Prof"));
+        assert_eq!(p.entries[0].views, Some(1200));
+        assert_eq!(p.entries[1].views, None);
     }
 
     #[test]

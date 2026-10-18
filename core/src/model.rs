@@ -79,6 +79,19 @@ pub struct MediaInfo {
     /// the whole list as well.
     #[uniffi(default = None)]
     pub playlist_url: Option<String>,
+    /// The video's own chapter marks, in order.
+    #[uniffi(default = [])]
+    pub chapters: Vec<Chapter>,
+    /// "2024-09-03".
+    #[uniffi(default = None)]
+    pub upload_date: Option<String>,
+}
+
+/// One chapter mark: where it starts, and what it is called.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Chapter {
+    pub start_ms: u64,
+    pub title: String,
 }
 
 /// What a captured stream URL declares about itself.

@@ -43,6 +43,8 @@ sealed interface ProbeState {
     data class NeedsCapture(val url: String) : ProbeState
     /** A YouTube playlist or channel, to pick entries from. */
     data class Listed(val list: YtPlaylist) : ProbeState
+    /** YouTube search results for what was typed. */
+    data class Searched(val query: String, val results: YtPlaylist) : ProbeState
     data class Failed(val message: String) : ProbeState
 }
 
@@ -164,6 +166,11 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
             fetchYouTube(url)
             return
         }
+        if (YouTube.isSearch(url)) {
+            autoStart = false
+            search(url)
+            return
+        }
         val site = Cookies.Site.of(Catalog.serviceFor(url))
         if (site == null) {
             probe = ProbeState.Failed("That link is not supported yet.")
@@ -225,6 +232,9 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun fetchYouTube(url: String) {
         val target = youtubeLink(url) ?: return
+        // A new link replaces whatever picker the last one left open.
+        chooser = null
+        playlist = null
         probe = ProbeState.Working
         workingNote = null
         val note: (String) -> Unit = { workingNote = it }
@@ -272,11 +282,58 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The results sheet, while it is open. */
+    var searchResults by mutableStateOf<ProbeState.Searched?>(null)
+
+    /** Searches YouTube; [more] asks for twenty further results. */
+    fun search(query: String, more: Boolean = false) {
+        val count = if (more) (searchResults?.results?.entries?.size ?: 0) + 20 else 20
+        if (!more) {
+            chooser = null
+            playlist = null
+            probe = ProbeState.Working
+        }
+        searching = true
+        viewModelScope.launch {
+            try {
+                val found = YouTube.search(query, count) { workingNote = it }
+                val state = ProbeState.Searched(query, found)
+                searchResults = state
+                probe = state
+            } catch (e: YouTubeException) {
+                if (!more) {
+                    probe = ProbeState.Failed(
+                        if (e.failure.kind == "network") "Network problem — ${e.failure.message}" else e.failure.message,
+                    )
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!more) probe = ProbeState.Failed(e.message ?: "Search failed.")
+            } finally {
+                searching = false
+                workingNote = null
+            }
+        }
+    }
+
+    /** True while a search, or a "more results", is running. */
+    var searching by mutableStateOf(false)
+        private set
+
+    /** A search result tapped: read it like a pasted link. */
+    fun openResult(url: String) {
+        searchResults = null
+        link = url
+        fetch()
+    }
+
     fun clearLink() {
         link = ""
         probe = ProbeState.Idle
         chooser = null
         playlist = null
+        searchResults = null
     }
 
     fun dismissChooser() { chooser = null }

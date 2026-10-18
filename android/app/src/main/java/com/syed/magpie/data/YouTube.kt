@@ -11,7 +11,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import uniffi.magpie_core.Chapter
 import uniffi.magpie_core.MediaInfo
+import uniffi.magpie_core.Mp4Tags
 import uniffi.magpie_core.Rendition
 import uniffi.magpie_core.YtFailure
 import uniffi.magpie_core.YtPlaylist
@@ -22,6 +24,7 @@ import uniffi.magpie_core.youtubeLink
 import uniffi.magpie_core.youtubeMedia
 import uniffi.magpie_core.youtubePick
 import uniffi.magpie_core.youtubePlaylist
+import uniffi.magpie_core.youtubeYtdlpArgs
 import java.io.File
 
 /**
@@ -61,7 +64,29 @@ object YouTube {
     @Volatile private var ready = false
 
     fun init(context: Context) {
-        if (!::appContext.isInitialized) appContext = context.applicationContext
+        if (::appContext.isInitialized) return
+        appContext = context.applicationContext
+        // Started with the app, so the first link pasted does not wait on it.
+        scope.launch { runCatching { start() } }
+    }
+
+    /**
+     * Readies Python and yt-dlp. Unpacking happens once per install; after
+     * that this is a quick check, but Android restarts the process whenever
+     * it likes, so it runs again on every launch.
+     */
+    private suspend fun start(onNote: (String) -> Unit = {}) = setup.withLock {
+        if (ready) return@withLock
+        // Only the real first run unpacks anything worth announcing.
+        if (!File(appContext.noBackupFilesDir, "youtubedl-android/packages/python").isDirectory) {
+            onNote("Preparing YouTube support — first time only…")
+        }
+        try {
+            YoutubeDL.getInstance().init(appContext)
+        } catch (e: YoutubeDLException) {
+            throw YouTubeException(YtFailure("other", "Could not start yt-dlp: ${e.message}"))
+        }
+        ready = true
     }
 
     fun prefs(): YouTubePrefs = prefs
@@ -69,23 +94,12 @@ object YouTube {
     fun isLink(url: String) = youtubeLink(url) != null
 
     /**
-     * Unpacks Python on first use (a few seconds, once per install) and makes
-     * sure yt-dlp is not the year-old copy inside the APK.
+     * Makes sure yt-dlp is running, and is not the year-old copy inside the APK.
      *
      * @param onNote what to tell the user while it takes long enough to notice.
      */
     private suspend fun ensureReady(onNote: (String) -> Unit) = withContext(Dispatchers.IO) {
-        setup.withLock {
-            if (!ready) {
-                onNote("Preparing YouTube support — first time only…")
-                try {
-                    YoutubeDL.getInstance().init(appContext)
-                } catch (e: YoutubeDLException) {
-                    throw YouTubeException(YtFailure("other", "Could not start yt-dlp: ${e.message}"))
-                }
-                ready = true
-            }
-        }
+        start(onNote)
         // Never updated: the copy inside the APK is too old to trust with
         // YouTube, so this one waits. After that, once a day in the background.
         if (YoutubeDL.getInstance().version(appContext) == null) {
@@ -100,10 +114,7 @@ object YouTube {
     suspend fun update(): Result<String?> = withContext(Dispatchers.IO) {
         updating.withLock {
             runCatching {
-                if (!ready) {
-                    YoutubeDL.getInstance().init(appContext)
-                    ready = true
-                }
+                start()
                 YoutubeDL.getInstance().updateYoutubeDL(appContext, YoutubeDL.UpdateChannel._STABLE)
                 prefs.lastUpdateCheck = System.currentTimeMillis()
                 YoutubeDL.getInstance().version(appContext)
@@ -132,6 +143,20 @@ object YouTube {
     }
 
     /**
+     * A YouTube search: the top [count] results, flat. yt-dlp answers a
+     * search with the same shape as a playlist, so the core reads it as one.
+     */
+    suspend fun search(query: String, count: Int = 20, onNote: (String) -> Unit = {}): YtPlaylist =
+        youtubePlaylist(run("ytsearch$count:${query.trim()}", listOf("--yes-playlist", "--flat-playlist"), onNote))
+
+    /** Anything in the link box that is not a link is a search. */
+    fun isSearch(text: String): Boolean {
+        val t = text.trim()
+        return t.isNotEmpty() && !t.contains("://") && !t.startsWith("www.") &&
+            !Regex("""^[\w-]+(\.[\w-]+)+(/\S*)?$""").matches(t)
+    }
+
+    /**
      * Runs `yt-dlp -J`. A failure that reads like yt-dlp falling behind
      * YouTube gets one fresh yt-dlp and a second try, unless it was updated
      * within the hour and the update is not the answer.
@@ -153,6 +178,7 @@ object YouTube {
         val request = YoutubeDLRequest(url).apply {
             addOption("-J")
             addOption("--no-warnings")
+            youtubeYtdlpArgs().chunked(2).forEach { (k, v) -> addOption(k, v) }
             extra.forEach { addOption(it) }
             cookieFile()?.let { addOption("--cookies", it.absolutePath) }
         }
@@ -243,6 +269,35 @@ object YouTube {
             subtitleUrl = subtitle?.url,
             subtitleExt = subtitle?.ext,
             thumbnail = info.thumbnail,
+            meta = metaOf(info),
+        )
+    }
+
+    /** What [tagsFor] needs later, kept on the job as JSON. */
+    private fun metaOf(info: MediaInfo): String = org.json.JSONObject().apply {
+        put("artist", info.uploader ?: org.json.JSONObject.NULL)
+        put("date", info.uploadDate ?: org.json.JSONObject.NULL)
+        put("chapters", org.json.JSONArray().apply {
+            info.chapters.forEach { put(org.json.JSONArray().put(it.startMs.toLong()).put(it.title)) }
+        })
+    }.toString()
+
+    /**
+     * Title, channel, date and chapters for [job]'s finished file — the
+     * title being whatever the user named it. [cover] goes in as cover art.
+     */
+    fun tagsFor(job: DownloadJob, cover: ByteArray?): Mp4Tags? {
+        val m = runCatching { org.json.JSONObject(job.meta ?: return null) }.getOrNull() ?: return null
+        val list = m.optJSONArray("chapters") ?: org.json.JSONArray()
+        return Mp4Tags(
+            title = job.title,
+            artist = m.optString("artist").takeIf { it.isNotEmpty() && !m.isNull("artist") },
+            date = m.optString("date").takeIf { it.isNotEmpty() && !m.isNull("date") },
+            chapters = (0 until list.length()).map {
+                val c = list.getJSONArray(it)
+                Chapter(startMs = c.getLong(0).toULong(), title = c.getString(1))
+            },
+            coverJpeg = cover,
         )
     }
 
@@ -331,6 +386,7 @@ object YouTube {
             subtitleUrl = subtitle?.url ?: job.subtitleUrl,
             subtitleExt = subtitle?.ext ?: job.subtitleExt,
             subtitleAuto = subtitle?.auto ?: job.subtitleAuto,
+            meta = metaOf(info),
         )
         return resolved to (ids.isNotEmpty() && newIds != job.renditionId)
     }

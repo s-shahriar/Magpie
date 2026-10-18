@@ -80,6 +80,7 @@ fn run() -> Result<()> {
 fn ytdlp(url: &str, cookies: Option<&str>, flat: bool) -> Result<String> {
     let mut cmd = Command::new("yt-dlp");
     cmd.args(["-J", "--no-warnings"]);
+    cmd.args(magpie_core::youtube::ytdlp_args());
     if magpie_core::youtube::link(url).is_some_and(|l| l.is_channel) {
         cmd.args(["--playlist-end", &magpie_core::youtube::CHANNEL_LIMIT.to_string()]);
     }

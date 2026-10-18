@@ -185,6 +185,16 @@ fun MagpieApp(
             )
         }
     }
+    vm.searchResults?.let { found ->
+        com.syed.magpie.ui.component.SearchSheet(
+            query = found.query,
+            results = found.results,
+            loadingMore = vm.searching,
+            onOpen = { vm.openResult(it.url) },
+            onMore = { vm.search(found.query, more = true) },
+            onDismiss = { vm.searchResults = null },
+        )
+    }
     vm.playlist?.let { list ->
         PlaylistSheet(
             list = list,

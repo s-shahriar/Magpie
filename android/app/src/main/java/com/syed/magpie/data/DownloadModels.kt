@@ -58,6 +58,11 @@ data class DownloadJob(
     val subtitleUri: String? = null,
     /** A picture for the library row while there is no file to take a frame from. */
     val thumbnail: String? = null,
+    /**
+     * YouTube: channel, date and chapters to write into the finished file,
+     * as JSON — see [YouTube.tagsFor].
+     */
+    val meta: String? = null,
 ) {
     val fraction: Float
         get() {
@@ -106,6 +111,7 @@ data class DownloadJob(
         put("subtitleExt", subtitleExt ?: JSONObject.NULL)
         put("subtitleUri", subtitleUri ?: JSONObject.NULL)
         put("thumbnail", thumbnail ?: JSONObject.NULL)
+        put("meta", meta ?: JSONObject.NULL)
     }
 
     companion object {
@@ -137,6 +143,7 @@ data class DownloadJob(
             subtitleExt = o.optStringOrNull("subtitleExt"),
             subtitleUri = o.optStringOrNull("subtitleUri"),
             thumbnail = o.optStringOrNull("thumbnail"),
+            meta = o.optStringOrNull("meta"),
         )
 
         fun listToJson(jobs: List<DownloadJob>): String =

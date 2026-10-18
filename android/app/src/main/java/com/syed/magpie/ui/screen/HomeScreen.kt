@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Login
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material3.*
@@ -51,7 +52,7 @@ fun HomeScreen(
             value = vm.link,
             onValueChange = { vm.link = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { Text("Paste a YouTube, Facebook or Drive link") },
+            placeholder = { Text("Paste a link, or search YouTube") },
             singleLine = false,
             maxLines = 3,
             shape = MaterialTheme.shapes.medium,
@@ -91,7 +92,15 @@ fun HomeScreen(
             // half the spinner's width the moment the button was pressed.
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 val working = vm.probe is ProbeState.Working
-                Text(if (working) "Reading link…" else "Fetch qualities")
+                val searching = com.syed.magpie.data.YouTube.isSearch(vm.link)
+                Text(
+                    when {
+                        working && searching -> "Searching…"
+                        working -> "Reading link…"
+                        searching -> "Search YouTube"
+                        else -> "Fetch qualities"
+                    },
+                )
                 if (working) {
                     CircularProgressIndicator(
                         Modifier.align(Alignment.CenterStart).size(20.dp),
@@ -141,6 +150,15 @@ fun HomeScreen(
                     icon = Icons.AutoMirrored.Filled.PlaylistPlay,
                 )
             }
+            is ProbeState.Searched -> if (vm.searchResults == null) {
+                Notice(
+                    title = "Results for “${s.query}”",
+                    body = "${s.results.entries.size} videos",
+                    actionLabel = "Show results",
+                    onAction = { vm.searchResults = s },
+                    icon = Icons.Default.Search,
+                )
+            }
             is ProbeState.Ready -> if (vm.chooser == null) {
                 Notice(
                     title = s.info.title,
@@ -162,7 +180,7 @@ fun HomeScreen(
 
         Spacer(Modifier.height(30.dp))
         Text(
-            "Works with YouTube videos, playlists and channels, view-only Drive files, and private group posts you already have access to.",
+            "Works with YouTube videos, playlists, channels and search, view-only Drive files, and private group posts you already have access to.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

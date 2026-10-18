@@ -84,10 +84,15 @@ fun YouTubeSheet(
         info.video.filter { it.kind == "video" }.mapNotNull { it.codec }.distinct()
             .sortedBy { listOf("h264", "vp9", "av1").indexOf(it).let { i -> if (i < 0) 9 else i } }
     }
+    // Sorted by what the row costs — video and the audio merged with it —
+    // since that is the size each row shows. By video alone, a file with its
+    // own audio sank below bigger ones.
     val rows = remember(info.mediaId, codec, track) {
         videoRows(info, codec, prefs.codec).map { v ->
             val audio = if (v.kind == "muxed") null else YouTube.audioFor(info, v, track?.lang)
             v to audio
+        }.sortedBy { (v, a) ->
+            v.approxBytes?.toLong()?.let { it + (a?.approxBytes?.toLong() ?: 0) } ?: Long.MAX_VALUE
         }
     }
     val audioRows = remember(info.mediaId, track) {
@@ -328,7 +333,13 @@ private fun <T> Picker(
             Row(Modifier.padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.width(8.dp))
-                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                Text(
+                    label,
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                )
                 Icon(Icons.Default.ArrowDropDown, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -432,13 +443,13 @@ private fun audioTracks(info: MediaInfo): List<Track> =
     info.audio.groupBy { it.language }.map { (lang, list) ->
         val original = list.any { it.original }
         val name = list.firstNotNullOfOrNull { it.trackName } ?: lang ?: "Audio"
-        Track(lang, name.replace(" original", "") + if (original && info.audio.map { it.language }.distinct().size > 1) " (original)" else "", original)
+        Track(lang, name + if (original && info.audio.map { it.language }.distinct().size > 1) " (original)" else "", original)
     }.sortedWith(compareByDescending<Track> { it.original }.thenBy { it.name })
 
 /**
  * One row per height, frame rate and dynamic range, in the codec asked for —
  * or, with no codec chosen, the one the codec setting prefers. A file with
- * its own audio keeps a row of its own. Smallest first, as everywhere.
+ * its own audio keeps a row of its own. The caller sorts, by total size.
  */
 private fun videoRows(info: MediaInfo, codec: String?, pref: YouTubePrefs.Codec): List<Rendition> {
     val order = if (pref == YouTubePrefs.Codec.COMPAT) listOf("h264", "vp9", "av1") else listOf("av1", "vp9", "h264")
@@ -448,7 +459,6 @@ private fun videoRows(info: MediaInfo, codec: String?, pref: YouTubePrefs.Codec)
         .groupBy { listOf(it.height, it.fps, it.hdr, it.kind == "muxed") }
         .values
         .map { group -> group.minWith(compareBy<Rendition>(rank).thenByDescending { it.bitrate }) }
-        .sortedBy { it.approxBytes?.toLong() ?: Long.MAX_VALUE }
 }
 
 private fun videoDetail(v: Rendition, a: Rendition?): String = buildList {

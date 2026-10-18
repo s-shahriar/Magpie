@@ -9,10 +9,12 @@ pub mod dhakaflix;
 pub mod extract;
 pub mod http;
 pub mod model;
+pub mod mp4tags;
 pub mod youtube;
 
 pub use dhakaflix::{DfCategory, DfError, DfFolder, DfItem, DfSearch};
-pub use model::{MagpieError, MediaInfo, Rendition, StreamFacts, SubTrack};
+pub use model::{Chapter, MagpieError, MediaInfo, Rendition, StreamFacts, SubTrack};
+pub use mp4tags::Mp4Tags;
 pub use youtube::{YtEntry, YtFailure, YtLink, YtPick, YtPlaylist, YtPrefs};
 
 uniffi::setup_scaffolding!();
@@ -74,6 +76,12 @@ pub fn youtube_link(url: String) -> Option<YtLink> {
     youtube::link(url.trim())
 }
 
+/// Arguments to add to every yt-dlp read (which player clients to ask).
+#[uniffi::export]
+pub fn youtube_ytdlp_args() -> Vec<String> {
+    youtube::ytdlp_args()
+}
+
 /// Renditions from `yt-dlp -J <video>` output.
 #[uniffi::export]
 pub fn youtube_media(json: String) -> Result<MediaInfo, MagpieError> {
@@ -114,6 +122,13 @@ pub fn codec_label(codec: String) -> String {
 #[uniffi::export]
 pub fn captions_to_srt(body: String, ext: String) -> Option<String> {
     youtube::captions_to_srt(&body, &ext)
+}
+
+/// `moov` with title, channel, date, chapters and cover added, or null when
+/// it cannot be tagged. The caller writes it back where it came from.
+#[uniffi::export]
+pub fn mp4_tag_moov(moov: Vec<u8>, tags: Mp4Tags) -> Option<Vec<u8>> {
+    mp4tags::tag_moov(&moov, &tags)
 }
 
 /// Version string, shown in the app's About row.

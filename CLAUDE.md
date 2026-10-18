@@ -117,6 +117,24 @@ captions → SRT, error classification), and bytes go through the normal
   when their turn comes. YouTube has its own lane of 2 in the engine.
 - `jniLibs { useLegacyPackaging = true }` is required: Python is unpacked from
   `libpython.zip.so` in the installed native-lib dir. Adds ~17 MB to the APK.
+- Player clients are pinned (`youtube::PLAYER_CLIENTS` = `web_embedded,mweb,default`):
+  yt-dlp's defaults get "confirm you're not a bot" on a flagged home IP while
+  `web_embedded` still returns the full ladder. Change it there, not per caller.
+- Search is `ytsearchN:<query>` with `--flat-playlist`; it parses as a playlist.
+
+## Merging (Media3 `Mp4Muxer`) — what bit us
+
+- **Opus:** Android hands over `OpusHead` (v1, little-endian); Media3 1.5.1
+  copies it into `dOps`, which must be v0, big-endian. Players then refuse the
+  whole file. `OpusConfig` converts it first.
+- **VP9 from WebM:** no usable `vpcC`; Media3 wrote level 1.0, 4:4:4 and the
+  file would not play. `Vp9Config` builds one from the first keyframe.
+- **Speed:** streamable output (index rewritten every second of media), sample
+  batching and sample copying are all off. Samples are fed interleaved by time.
+- Tags and chapters (`mp4tags.rs`) are added by rewriting the trailing `moov`
+  in place, so the merged index must stay the last box.
+- `magpie probe` + ffprobe on a pulled file is the fastest way to check a box:
+  `ffprobe -show_chapters -show_entries format_tags`.
 
 ## House rules
 

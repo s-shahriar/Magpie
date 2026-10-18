@@ -93,7 +93,11 @@ class Downloader(private val context: Context) {
         }
 
         val uri: Uri
-        if (needsAudio) {
+        // An AAC-only YouTube download goes through the writer too, alone:
+        // what YouTube serves is a fragmented stream file, and a clean .m4a
+        // is one every player opens and the only kind that can carry tags.
+        val remuxAudio = !needsAudio && job.meta != null && job.mime == "audio/mp4"
+        if (needsAudio || remuxAudio) {
             // Mux directly into the destination file. Writing the merged MP4 to
             // cache and then copying it into MediaStore meant a second full
             // pass over several hundred megabytes for no reason — on a 361 MB
@@ -102,9 +106,21 @@ class Downloader(private val context: Context) {
             try {
                 context.contentResolver.openFileDescriptor(uri, "rw").use { pfd ->
                     checkNotNull(pfd) { "Could not open the output file" }
-                    mux(videoFile, audioFile, pfd.fileDescriptor, job.totalBytes) { done, total ->
+                    val began = System.nanoTime()
+                    // The download's one file is the audio, when there is no video.
+                    val video = videoFile.takeIf { needsAudio }
+                    val audio = if (needsAudio) audioFile else videoFile
+                    mux(video, audio, pfd.fileDescriptor, job.totalBytes) { done, total ->
                         onTick(Tick(DownloadStatus.MERGING, "Merging", done, total, 0))
                     }
+                    android.util.Log.i(
+                        "MagpieMerge",
+                        "merged ${formatBytes((video?.length() ?: 0) + audio.length())} in " +
+                            "${(System.nanoTime() - began) / 1_000_000} ms",
+                    )
+                    val cover = if (remuxAudio) fetchCover(job) else null
+                    YouTube.takeIf { job.source == it.SOURCE }?.tagsFor(job, cover)
+                        ?.let { tagMp4(pfd.fileDescriptor, it) }
                 }
                 markReady(uri)
             } catch (t: Throwable) {
@@ -171,6 +187,15 @@ class Downloader(private val context: Context) {
         // from Drive is throttled to about playback speed regardless of the
         // link, so one stream is the bottleneck rather than the network.
         val probe = SegmentedFetch.probe(url, cookie, ua)
+        // Already all here — a merge or save that was cut off last time. A
+        // finished segmented fetch drops its chunk map, so without this the
+        // file looked new and every byte was fetched again. Length is only
+        // proof once the map is gone: while it exists the file is
+        // preallocated to full size.
+        val chunkMap = File(target.parentFile, target.name + ".chunks")
+        if (probe.total != null && !chunkMap.exists() && target.exists() && target.length() == probe.total) {
+            return
+        }
         if (SegmentedFetch.worthIt(probe)) {
             val size = probe.total!!
             val began = System.nanoTime()
@@ -287,18 +312,33 @@ class Downloader(private val context: Context) {
      */
     @OptIn(UnstableApi::class)
     private fun mux(
-        video: File,
+        video: File?,
         audio: File,
         target: java.io.FileDescriptor,
         expected: Long?,
         onProgress: (Long, Long?) -> Unit,
     ) {
-        val muxer = Mp4Muxer.Builder(FileOutputStream(target)).build()
+        // Tuned for a straight copy, which made the merge several times faster:
+        // - Not "streamable": that keeps the index at the front by rebuilding
+        //   and rewriting it every second of media. It goes at the end;
+        //   players read either.
+        // - No batching and no copying: by default every sample is copied into
+        //   a fresh buffer and queued, which on an hour of video is hundreds of
+        //   thousands of allocations and a GC storm. Written straight from the
+        //   read buffer instead, which is safe because each write completes
+        //   before the next read.
+        val muxer = Mp4Muxer.Builder(FileOutputStream(target))
+            .setAttemptStreamableOutputEnabled(false)
+            .setSampleBatchingEnabled(false)
+            .setSampleCopyEnabled(false)
+            .build()
         // A CDN that answered with an error page, or a transfer cut short,
         // lands here as "Failed to instantiate extractor" — true, and useless.
-        val inputs = listOf(video, audio).map {
+        // Each input with the kind of track taken from it.
+        val sources = listOfNotNull(video?.let { it to "video/" }, audio to "audio/")
+        val inputs = sources.map { (file, _) ->
             try {
-                MediaExtractor().apply { setDataSource(it.absolutePath) }
+                MediaExtractor().apply { setDataSource(file.absolutePath) }
             } catch (e: Exception) {
                 error("The downloaded stream could not be read — remove this row and fetch the link again")
             }
@@ -310,8 +350,7 @@ class Downloader(private val context: Context) {
                 for (i in 0 until ex.trackCount) {
                     val fmt = ex.getTrackFormat(i)
                     val mime = fmt.getString(MediaFormat.KEY_MIME).orEmpty()
-                    val wanted = (index == 0 && mime.startsWith("video/")) ||
-                        (index == 1 && mime.startsWith("audio/"))
+                    val wanted = mime.startsWith(sources[index].second)
                     if (!wanted) continue
                     // A muxer's own complaint is "Failed to add the track",
                     // which says nothing about the cause. The picker already
@@ -324,55 +363,195 @@ class Downloader(private val context: Context) {
                         maxBuffer = maxOf(maxBuffer, fmt.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
                     }
                     ex.selectTrack(i)
+                    if (mime == MediaFormat.MIMETYPE_VIDEO_VP9) describeVp9(ex, fmt)
+                    if (mime == MediaFormat.MIMETYPE_AUDIO_OPUS) describeOpus(fmt)
                     mapping += ex to muxer.addTrack(MediaFormatUtil.createFormatFromMediaFormat(fmt))
                 }
             }
             check(mapping.isNotEmpty()) { "Nothing to merge — no usable tracks" }
 
-            var buffer = ByteBuffer.allocate(maxBuffer)
+            // Direct: the extractor copies straight in, rather than through a
+            // heap array on every sample.
+            var buffer = ByteBuffer.allocateDirect(maxBuffer)
             val info = MediaCodec.BufferInfo()
             var copied = 0L
             var lastReport = 0L
-            mapping.forEach { (ex, track) ->
-                while (true) {
-                    // A sample larger than the buffer is refused, not
-                    // truncated, and not every track declares its maximum
-                    // input size. Grow and read the same sample again.
-                    val size = try {
-                        ex.readSampleData(buffer, 0)
-                    } catch (e: IllegalArgumentException) {
-                        val next = buffer.capacity() * 2
-                        check(next <= MAX_SAMPLE) {
-                            "A single frame is too large to copy (over ${formatBytes(MAX_SAMPLE.toLong())})"
-                        }
-                        buffer = ByteBuffer.allocate(next)
-                        continue
+            var readNanos = 0L
+            var writeNanos = 0L
+            // Interleaved by time: always the track that is furthest behind.
+            // Video-then-audio put an hour of one before any of the other,
+            // which players cope with but have to seek across the file to do.
+            val live = mapping.toMutableList()
+            while (live.isNotEmpty()) {
+                val pick = live.minBy { it.first.sampleTime }
+                val (ex, track) = pick
+                if (ex.sampleTime < 0) {
+                    live.remove(pick)
+                    continue
+                }
+                // A sample larger than the buffer is refused, not truncated,
+                // and not every track declares its maximum input size. Grow
+                // and read the same sample again.
+                val t0 = System.nanoTime()
+                val size = try {
+                    ex.readSampleData(buffer, 0)
+                } catch (e: IllegalArgumentException) {
+                    val next = buffer.capacity() * 2
+                    check(next <= MAX_SAMPLE) {
+                        "A single frame is too large to copy (over ${formatBytes(MAX_SAMPLE.toLong())})"
                     }
-                    if (size < 0) break
-                    info.offset = 0
-                    info.size = size
-                    info.presentationTimeUs = ex.sampleTime
-                    info.flags = ex.sampleFlags
-                    muxer.writeSampleData(track, buffer, info)
-                    ex.advance()
-                    copied += size
-                    // Without this the UI sat on a bare "Merging" for minutes
-                    // and looked hung.
-                    if (copied - lastReport > 8L * 1024 * 1024) {
-                        lastReport = copied
-                        onProgress(copied, expected)
-                    }
+                    buffer = ByteBuffer.allocateDirect(next)
+                    continue
+                }
+                if (size < 0) {
+                    live.remove(pick)
+                    continue
+                }
+                info.offset = 0
+                info.size = size
+                info.presentationTimeUs = ex.sampleTime
+                info.flags = ex.sampleFlags
+                val t1 = System.nanoTime()
+                muxer.writeSampleData(track, buffer, info)
+                val t2 = System.nanoTime()
+                ex.advance()
+                readNanos += (t1 - t0) + (System.nanoTime() - t2)
+                writeNanos += t2 - t1
+                copied += size
+                // Without this the UI sat on a bare "Merging" for minutes
+                // and looked hung.
+                if (copied - lastReport > 8L * 1024 * 1024) {
+                    lastReport = copied
+                    onProgress(copied, expected)
                 }
             }
             // close() is what writes the index — a file that is never closed
             // is a pile of samples no player will open.
+            val t3 = System.nanoTime()
             muxer.close()
+            android.util.Log.i(
+                "MagpieMerge",
+                "read ${readNanos / 1_000_000} ms, write ${writeNanos / 1_000_000} ms, " +
+                    "index ${(System.nanoTime() - t3) / 1_000_000} ms",
+            )
             onProgress(expected ?: copied, expected)
         } finally {
             runCatching { muxer.close() }
             inputs.forEach { runCatching { it.release() } }
         }
     }
+
+    /**
+     * Gives a VP9 track a `vpcC` it can be trusted with — see [Vp9Config].
+     * One already in that form (copied out of an MP4) is left alone.
+     */
+    private fun describeVp9(ex: MediaExtractor, fmt: MediaFormat) {
+        val csd = fmt.getByteBuffer("csd-0")
+        if (csd != null && csd.remaining() >= 4 && csd.getInt(csd.position()) == 1 shl 24) return
+        val first = ByteBuffer.allocate(fmt.optInt(MediaFormat.KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024))
+        // Peeks: nothing advances until the copy loop runs.
+        val size = runCatching { ex.readSampleData(first, 0) }.getOrDefault(-1)
+        if (size <= 0) return
+        val frame = ByteArray(size).also { first.get(it) }
+        val fps = if (fmt.containsKey(MediaFormat.KEY_FRAME_RATE)) {
+            runCatching { fmt.getInteger(MediaFormat.KEY_FRAME_RATE).toFloat() }
+                .getOrElse { fmt.getFloat(MediaFormat.KEY_FRAME_RATE) }
+        } else {
+            60f // unknown: assume the higher rate, since a level too high is harmless
+        }
+        val box = Vp9Config.vpcC(
+            frame,
+            fmt.optInt(MediaFormat.KEY_WIDTH, 0),
+            fmt.optInt(MediaFormat.KEY_HEIGHT, 0),
+            fps,
+            isoColour(fmt),
+        ) ?: return
+        fmt.setByteBuffer("csd-0", ByteBuffer.wrap(box))
+    }
+
+    /**
+     * Writes [tags] into the finished MP4 in place. The writer puts the index
+     * last, so only that box is read, extended and written back; the media in
+     * front of it is never touched. Never fails the job — the file plays the
+     * same untagged.
+     */
+    private fun tagMp4(fd: java.io.FileDescriptor, tags: uniffi.magpie_core.Mp4Tags) {
+        runCatching {
+            val length = android.system.Os.fstat(fd).st_size
+            val head = ByteArray(16)
+            var at = 0L
+            while (at + 8 <= length) {
+                readFully(fd, head, at)
+                var size = ByteBuffer.wrap(head, 0, 4).int.toLong() and 0xffffffffL
+                if (size == 1L) size = ByteBuffer.wrap(head, 8, 8).long
+                if (size < 8) return
+                if (String(head, 4, 4, Charsets.ISO_8859_1) == "moov") {
+                    if (at + size != length) return // not last: growing it would overwrite media
+                    val moov = ByteArray(size.toInt())
+                    readFully(fd, moov, at)
+                    val tagged = uniffi.magpie_core.mp4TagMoov(moov, tags) ?: return
+                    var written = 0
+                    while (written < tagged.size) {
+                        written += android.system.Os.pwrite(fd, tagged, written, tagged.size - written, at + written)
+                    }
+                    return
+                }
+                at += size
+            }
+        }.onFailure { android.util.Log.w("MagpieMerge", "tagging skipped: ${it.message}") }
+    }
+
+    private fun readFully(fd: java.io.FileDescriptor, into: ByteArray, at: Long) {
+        var read = 0
+        while (read < into.size) {
+            val n = android.system.Os.pread(fd, into, read, into.size - read, at + read)
+            if (n <= 0) error("Short read")
+            read += n
+        }
+    }
+
+    /** The video's thumbnail as cover art for an audio file, if it can be had. */
+    private fun fetchCover(job: DownloadJob): ByteArray? = runCatching {
+        val url = job.thumbnail?.replace("/mqdefault.", "/hqdefault.") ?: return null
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 10_000
+            readTimeout = 10_000
+        }
+        try {
+            if (conn.responseCode !in 200..299) return null
+            conn.inputStream.use { it.readBytes() }
+        } finally {
+            conn.disconnect()
+        }
+    }.getOrNull()
+
+    /** Opus setup rewritten into the form MP4 needs — see [OpusConfig]. */
+    private fun describeOpus(fmt: MediaFormat) {
+        val csd = fmt.getByteBuffer("csd-0") ?: return
+        val head = ByteArray(csd.remaining()).also { csd.duplicate().get(it) }
+        OpusConfig.forMp4(head)?.let { fmt.setByteBuffer("csd-0", ByteBuffer.wrap(it)) }
+    }
+
+    /** MediaFormat's colour keys as ISO primaries, transfer and matrix codes. */
+    private fun isoColour(fmt: MediaFormat): Triple<Int, Int, Int> {
+        val standard = fmt.optInt(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+        val transfer = fmt.optInt(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+        val (primaries, matrix) = when (standard) {
+            MediaFormat.COLOR_STANDARD_BT2020 -> 9 to 9
+            MediaFormat.COLOR_STANDARD_BT601_PAL -> 5 to 5
+            MediaFormat.COLOR_STANDARD_BT601_NTSC -> 6 to 6
+            else -> 1 to 1
+        }
+        val iso = when (transfer) {
+            MediaFormat.COLOR_TRANSFER_ST2084 -> 16
+            MediaFormat.COLOR_TRANSFER_HLG -> 18
+            else -> 1
+        }
+        return Triple(primaries, iso, matrix)
+    }
+
+    private fun MediaFormat.optInt(key: String, default: Int): Int =
+        if (containsKey(key)) runCatching { getInteger(key) }.getOrDefault(default) else default
 
     private fun createPending(job: DownloadJob): Uri {
         val values = ContentValues().apply {

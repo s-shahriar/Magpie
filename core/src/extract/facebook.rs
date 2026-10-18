@@ -143,6 +143,8 @@ pub fn probe(url: &str, cookie: &str) -> Result<MediaInfo, MagpieError> {
         uploader: None,
         subtitles: Vec::new(),
         playlist_url: None,
+        chapters: Vec::new(),
+        upload_date: None,
     };
 
     // One entry per vencode_tag: the same rendition is repeated many times
