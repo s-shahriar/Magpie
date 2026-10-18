@@ -78,6 +78,48 @@ object Cookies {
     fun flush() = CookieManager.getInstance().flush()
 
     /**
+     * Forgets the Google and YouTube session, leaving Facebook's alone.
+     *
+     * A Google session that came from somewhere else — a desktop browser's
+     * cookies brought in with [importNetscape] — is refused by Google's own
+     * sign-in, which answers every attempt with its "problem with your cookie
+     * settings" page: desktop Chrome now ties its Google cookies to that
+     * machine. Clearing them is the only way back to a sign-in that works.
+     *
+     * The WebView has no per-domain clear, so each cookie these hosts would be
+     * sent is expired by name in every form it can be stored under: for the
+     * parent domain, for the host as a domain (what an imported cookie with
+     * `accounts.google.com` in its domain column becomes), and host-only.
+     * Missing that middle form left an imported `LSID` beside the fresh one,
+     * and Google refused the pair at the end of every sign-in.
+     */
+    fun clearGoogle(done: () -> Unit = {}) {
+        val cm = CookieManager.getInstance()
+        val hosts = listOf(
+            "accounts.google.com" to ".google.com",
+            "www.google.com" to ".google.com",
+            "drive.google.com" to ".google.com",
+            "myaccount.google.com" to ".google.com",
+            "www.youtube.com" to ".youtube.com",
+            "m.youtube.com" to ".youtube.com",
+            "accounts.youtube.com" to ".youtube.com",
+        )
+        hosts.forEach { (host, domain) ->
+            val url = "https://$host/"
+            cm.getCookie(url).orEmpty().split(';')
+                .map { it.substringBefore('=').trim() }
+                .filter { it.isNotEmpty() }
+                .forEach { name ->
+                    cm.setCookie(url, "$name=; Domain=$domain; Path=/; Max-Age=0; Secure")
+                    cm.setCookie(url, "$name=; Domain=$host; Path=/; Max-Age=0; Secure")
+                    cm.setCookie(url, "$name=; Path=/; Max-Age=0; Secure")
+                }
+        }
+        cm.flush()
+        done()
+    }
+
+    /**
      * The jar's cookies for [site] as a Netscape `cookies.txt`, which is what
      * yt-dlp reads. The WebView hands back names and values only, so every
      * cookie is written for the whole domain, over HTTPS, with no expiry.

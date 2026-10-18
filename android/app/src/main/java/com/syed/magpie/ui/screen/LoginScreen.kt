@@ -70,6 +70,9 @@ fun LoginScreen(site: Cookies.Site, onDone: () -> Unit) {
     var desktop by remember { mutableStateOf(site == Cookies.Site.FACEBOOK) }
     var web by remember { mutableStateOf<WebView?>(null) }
     var passkeys by remember { mutableStateOf(false) }
+    // Google's "problem with your cookie settings" page has been cleared
+    // for once already; a second time is not something clearing fixes.
+    var clearedGoogle by remember { mutableStateOf(false) }
 
     BackHandler { onDone() }
 
@@ -187,6 +190,20 @@ fun LoginScreen(site: Cookies.Site, onDone: () -> Unit) {
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
+                                // An old or borrowed Google session — see
+                                // Cookies.clearGoogle. Cleared once, and the
+                                // sign-in starts again from a clean slate.
+                                val google = site == Cookies.Site.YOUTUBE || site == Cookies.Site.GDRIVE
+                                if (google && url?.contains("accounts.google.com/CookieMismatch") == true) {
+                                    if (!clearedGoogle) {
+                                        clearedGoogle = true
+                                        failure = "Cleared an old Google session — sign in again."
+                                        Cookies.clearGoogle { view?.loadUrl(site.loginUrl) }
+                                        return
+                                    }
+                                    failure = "Google still refuses this session. Sign out of Google " +
+                                        "Drive in Settings, then try again."
+                                }
                                 CookieManager.getInstance().flush()
                                 signedIn = Cookies.isSignedIn(site)
                                 loading = false

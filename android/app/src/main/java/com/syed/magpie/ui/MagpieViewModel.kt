@@ -93,6 +93,12 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
 
     fun showLibrary() { libraryRequest++ }
 
+    /** Library → Downloader: where a download that was just started shows up. */
+    fun showDownloads() {
+        libraryModule = Module.Downloader
+        showLibrary()
+    }
+
     /** The module open in the first tab; null is the hub. */
     var module by mutableStateOf<Module?>(null)
 
@@ -375,6 +381,7 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         )
         link = ""
         probe = ProbeState.Idle
+        showDownloads()
     }
 
     /**
@@ -388,6 +395,7 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         subtitle?.let { youtubePrefs.subtitleLang = it.lang }
         link = ""
         probe = ProbeState.Idle
+        showDownloads()
     }
 
     private fun startYouTubePreset(info: MediaInfo, quality: YouTubePrefs.Quality) {
@@ -402,7 +410,6 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         android.widget.Toast.makeText(
             getApplication(), "Downloading ${info.title} · $label", android.widget.Toast.LENGTH_SHORT,
         ).show()
-        showLibrary()
     }
 
     /**
@@ -433,7 +440,7 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
             "Queued ${jobs.size} from ${list.title}",
             android.widget.Toast.LENGTH_SHORT,
         ).show()
-        showLibrary()
+        showDownloads()
     }
 
     /** Turn streams seen on the wire into a normal quality choice. */
@@ -507,7 +514,6 @@ class MagpieViewModel(app: Application) : AndroidViewModel(app) {
         android.widget.Toast.makeText(
             getApplication(), "Downloading ${info.title} · ${best.label}", android.widget.Toast.LENGTH_SHORT,
         ).show()
-        showLibrary()
     }
 
     /** Title scraped from the capture page, when there is one. */
