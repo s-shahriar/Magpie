@@ -217,10 +217,11 @@ object YouTube {
             // cache the plugin keeps would be thrown away every run. App
             // files rather than the cache dir, which Android may empty.
             addOption("--cache-dir", File(appContext.filesDir, "ytdlp-cache").absolutePath)
-            youtubeYtdlpArgs(fallback).chunked(2).forEach { (k, v) -> addOption(k, v) }
+            val cookies = cookieFile()
+            youtubeYtdlpArgs(fallback, signedIn = cookies != null).chunked(2).forEach { (k, v) -> addOption(k, v) }
             plugins?.let { addOption("--plugin-dirs", it.absolutePath) }
+            cookies?.let { addOption("--cookies", it.absolutePath) }
             extra.forEach { addOption(it) }
-            cookieFile()?.let { addOption("--cookies", it.absolutePath) }
             if (com.syed.magpie.BuildConfig.DEBUG) addOption("-v")
         }
         try {

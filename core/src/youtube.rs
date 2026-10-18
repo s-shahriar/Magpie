@@ -24,7 +24,14 @@ pub const SOURCE: &str = "youtube";
 /// client still gets the whole ladder, up to 2160p and every dubbed track.
 /// Asking only that one, and skipping the watch page (which such an IP is
 /// refused anyway), saves several round trips on every read.
-pub fn ytdlp_args() -> Vec<String> {
+///
+/// Signed in, none of that applies: the embedded player cannot open private
+/// videos, and the watch page carries the account details yt-dlp needs. Its
+/// own signed-in defaults are used instead.
+pub fn ytdlp_args(signed_in: bool) -> Vec<String> {
+    if signed_in {
+        return Vec::new();
+    }
     vec![
         "--extractor-args".into(),
         "youtube:player_client=web_embedded;player_skip=webpage".into(),

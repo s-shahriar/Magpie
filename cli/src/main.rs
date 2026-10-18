@@ -78,7 +78,7 @@ fn run() -> Result<()> {
 
 /// Runs `yt-dlp -J` and returns its stdout; stderr is classified on failure.
 fn ytdlp(url: &str, cookies: Option<&str>, flat: bool) -> Result<String> {
-    match ytdlp_with(url, cookies, flat, magpie_core::youtube::ytdlp_args()) {
+    match ytdlp_with(url, cookies, flat, magpie_core::youtube::ytdlp_args(cookies.is_some())) {
         Ok(json) if flat => Ok(json),
         // Same rule as the app: a thin or failed first read gets one retry.
         Ok(json) if magpie_core::youtube::media(&json).is_ok_and(|i| !magpie_core::youtube::is_thin(&i)) => Ok(json),

@@ -76,10 +76,11 @@ pub fn youtube_link(url: String) -> Option<YtLink> {
     youtube::link(url.trim())
 }
 
-/// Arguments for a yt-dlp read: the fast first try, or the fallback.
+/// Arguments for a yt-dlp read: the first try (which depends on whether a
+/// YouTube session is being sent), or the fallback.
 #[uniffi::export]
-pub fn youtube_ytdlp_args(fallback: bool) -> Vec<String> {
-    if fallback { youtube::ytdlp_fallback_args() } else { youtube::ytdlp_args() }
+pub fn youtube_ytdlp_args(fallback: bool, signed_in: bool) -> Vec<String> {
+    if fallback { youtube::ytdlp_fallback_args() } else { youtube::ytdlp_args(signed_in) }
 }
 
 /// True when a first read came back without separate video streams.
