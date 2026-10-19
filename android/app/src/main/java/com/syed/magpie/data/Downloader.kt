@@ -381,13 +381,15 @@ class Downloader(private val context: Context) {
             // Video-then-audio put an hour of one before any of the other,
             // which players cope with but have to seek across the file to do.
             val live = mapping.toMutableList()
+            val written = IntArray(mapping.size)
             while (live.isNotEmpty()) {
+                // A track ends only when a read comes back empty. Its time
+                // can legitimately be negative: AAC with an edit list (which
+                // is how Facebook's audio arrives) starts a few priming
+                // samples before zero. Taking a negative time for the end
+                // dropped every such audio track and saved a silent video.
                 val pick = live.minBy { it.first.sampleTime }
                 val (ex, track) = pick
-                if (ex.sampleTime < 0) {
-                    live.remove(pick)
-                    continue
-                }
                 // A sample larger than the buffer is refused, not truncated,
                 // and not every track declares its maximum input size. Grow
                 // and read the same sample again.
@@ -415,6 +417,7 @@ class Downloader(private val context: Context) {
                 muxer.writeSampleData(track, buffer, info)
                 val t2 = System.nanoTime()
                 ex.advance()
+                written[mapping.indexOf(pick)]++
                 readNanos += (t1 - t0) + (System.nanoTime() - t2)
                 writeNanos += t2 - t1
                 copied += size
@@ -427,6 +430,11 @@ class Downloader(private val context: Context) {
             }
             // close() is what writes the index — a file that is never closed
             // is a pile of samples no player will open.
+            // A track that took no samples would be left out of the file
+            // without a word — a video with no sound. Refuse it instead.
+            mapping.indices.firstOrNull { written[it] == 0 }?.let {
+                error("The ${sources[inputs.indexOf(mapping[it].first)].second.removeSuffix("/")} track came out empty — remove this row and fetch the link again")
+            }
             val t3 = System.nanoTime()
             muxer.close()
             android.util.Log.i(

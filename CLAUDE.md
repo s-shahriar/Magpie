@@ -148,6 +148,10 @@ captions → SRT, error classification), and bytes go through the normal
 - **With copying off, Media3 keeps the `BufferInfo` you pass** and builds the
   index from it at the end. Reusing one object made every index entry describe
   the last sample — a file that would not decode. New `BufferInfo` per sample.
+- **A track ends only when a read returns nothing — never on a negative
+  time.** AAC with an edit list (Facebook's audio) starts at about −20 ms;
+  treating that as the end dropped the whole audio track (0.10.0–0.10.3). A
+  track that receives no samples now fails the merge instead of saving silently.
 - Tags and chapters (`mp4tags.rs`) are added by rewriting the trailing `moov`
   in place, so the merged index must stay the last box.
 - `magpie probe` + ffprobe on a pulled file is the fastest way to check a box:
