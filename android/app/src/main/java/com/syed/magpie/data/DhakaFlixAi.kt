@@ -50,8 +50,18 @@ object DhakaFlixAi {
             // already knows. Very new releases may be missing, but a title the
             // user half-remembers is still found.
             parse(ask(apiKey, model, query, grounded = false))
+        } catch (e: EmptyReply) {
+            // A grounded answer can come back as search metadata and no text
+            // at all — seen for a query that is a song rather than a film.
+            // Asked again without the search, the model answers from memory.
+            parse(ask(apiKey, model, query, grounded = false))
         }
     }
+
+    /** A 200 with no text in it; [reason] is Gemini's own, when it gave one. */
+    class EmptyReply(reason: String?) : IOException(
+        "Gemini returned no answer" + (reason?.let { " ($it)" } ?: "") + " — try rewording the search",
+    )
 
     private fun ask(apiKey: String, model: Model, query: String, grounded: Boolean): String {
         val body = JSONObject()
@@ -89,7 +99,21 @@ object DhakaFlixAi {
         val text = buildString {
             if (parts != null) for (i in 0 until parts.length()) append(parts.optJSONObject(i)?.optString("text").orEmpty())
         }
-        if (text.isBlank()) throw IOException("Empty response from Gemini")
+        if (text.isBlank()) {
+            val root = JSONObject(reply)
+            val first = root.optJSONArray("candidates")?.optJSONObject(0)
+            val reason = first?.optString("finishReason")?.takeIf { it.isNotEmpty() && it != "STOP" }
+                ?: root.optJSONObject("promptFeedback")?.optString("blockReason")?.takeIf { it.isNotEmpty() }
+            if (com.syed.magpie.BuildConfig.DEBUG) {
+                android.util.Log.d(
+                    "MagpieAi",
+                    "empty reply: finish=${first?.optString("finishReason")} " +
+                        "keys=${first?.keys()?.asSequence()?.toList()} " +
+                        "parts=${parts?.length()} block=${root.optJSONObject("promptFeedback")}",
+                )
+            }
+            throw EmptyReply(reason)
+        }
         val json = Regex("""\[[\s\S]*]""").find(text)?.value ?: throw IOException("Gemini did not return a list")
         val arr = runCatching { JSONArray(json) }.getOrElse { throw IOException("Could not read Gemini's reply") }
         return (0 until arr.length())
